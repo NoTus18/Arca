@@ -148,17 +148,17 @@ def convert_trade_row(row):
         tx_type = "conversion"
         base, quote = row["symbol"].split(".")
         legs.extend([
-        {
-            "role": "bought" if row["quantity"] > 0 else "sold",
-            "amount": row["quantity"],
-            "currency": base,
-        },
-        {
-            "role": "bought" if row["proceeds"] > 0 else "sold",
-            "amount": row["proceeds"],
-            "currency": quote,
-        },
-    ])
+            {
+                "role": "bought" if row["quantity"] > 0 else "sold",
+                "amount": row["quantity"],
+                "currency": base,
+            },
+            {
+                "role": "bought" if row["proceeds"] > 0 else "sold",
+                "amount": row["proceeds"],
+                "currency": quote,
+            },
+        ])
     else:
         raise ValueError(f"Unknown IBKR AssetClass: {row['asset_class']} ({row['isin']})")
 

@@ -21,6 +21,12 @@ def test_schema_tables_exist():
         "cash_balances",
         "holdings",
         "transaction_summary",
+        "daily_holdings",
+        "daily_prices",
+        "daily_fx",
+        "daily_cash",
+        "daily_valuation",
+        "holding_changes",
     }
 
     assert table_names == expected_tables
