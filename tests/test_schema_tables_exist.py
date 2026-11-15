@@ -27,6 +27,7 @@ def test_schema_tables_exist():
         "daily_cash",
         "daily_valuation",
         "holding_changes",
+        "trades",
     }
 
     assert table_names == expected_tables
