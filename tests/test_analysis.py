@@ -104,6 +104,30 @@ def test_portfolio_value_filters_by_ticker_asset_type_and_cash(connection):
     assert first_day(tickers=["ETF1", "STK1"], asset_types=["etf"], include_cash=False) == Decimal("20")
 
 
+def test_portfolio_value_raises_when_a_holding_has_no_price_yet(connection):
+    # Bought on 4 Jan, but the first price is 5 Jan: 4 Jan must not silently drop the holding.
+    connection.execute(
+        """
+        INSERT INTO instruments (instrument_id, isin, name, asset_type, currency, price_ticker)
+        VALUES (1, 'IE0000000001', 'Test ETF', 'etf', 'EUR', 'ETF1')
+        """
+    )
+    connection.execute("INSERT INTO transactions (transaction_id, account_id, type, event_date) VALUES (10, 1, 'buy', '2026-01-04')")
+    connection.execute(
+        """
+        INSERT INTO transaction_legs (transaction_id, leg_number, role, amount, instrument_id, source_file, source_id)
+        VALUES (10, 1, 'shares', 2, 1, 'test.csv', 'buy-etf')
+        """
+    )
+    connection.execute("INSERT INTO prices VALUES (1, '2026-01-05', 10, 10, 'EUR')")
+
+    with pytest.raises(ValueError, match="2026, 1, 4"):
+        portfolio_value(connection, [1])
+
+    # Cash alone is unaffected by the missing price.
+    assert portfolio_value(connection, [1], include_cash=True, asset_types=[])[0] == (date(2026, 1, 5), Decimal("100"))
+
+
 def test_portfolio_value_needs_accounts(connection):
     with pytest.raises(ValueError):
         portfolio_value(connection, [])

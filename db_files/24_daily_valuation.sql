@@ -6,7 +6,7 @@ WITH position_values AS (
     CASE WHEN p.currency = 'EUR' THEN 1 ELSE f.rate END AS fx_rate, 
     CAST((dh.quantity * p.close) / fx_rate AS DECIMAL(18, 6)) AS value_eur
   FROM daily_holdings dh
-  JOIN daily_prices p ON dh.instrument_id = p.instrument_id AND dh.date = p.date
+  LEFT JOIN daily_prices p ON dh.instrument_id = p.instrument_id AND dh.date = p.date
   LEFT JOIN daily_fx f ON p.currency = f.quote_currency AND dh.date = f.date
 ), 
 cash_values AS (

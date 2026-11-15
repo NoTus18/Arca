@@ -2,11 +2,15 @@ from datetime import date
 from decimal import Decimal
 
 import duckdb
+import pytest
 
+from analysis.portfolio import holdings_snapshot
 from init_db import apply_sql_files
 
 
-def test_trades_sums_cash_legs_in_eur_per_trade():
+@pytest.fixture
+def connection():
+    """Lightyear META: buy 1 with a fee, sell 0.5 with a fee, reinvest 0.01; plus a currency conversion."""
     connection = duckdb.connect(database=":memory:")
     apply_sql_files(connection)
 
@@ -44,7 +48,11 @@ def test_trades_sums_cash_legs_in_eur_per_trade():
     connection.execute(
         "INSERT INTO fx_rates VALUES ('2026-01-09', 'EUR', 'USD', 1.17), ('2026-01-10', 'EUR', 'USD', 1.20)"
     )
+    yield connection
+    connection.close()
 
+
+def test_trades_sums_cash_legs_in_eur_per_trade(connection):
     rows = connection.execute(
         "SELECT transaction_id, event_date, quantity, is_reinvestment, cash_eur FROM trades ORDER BY transaction_id"
     ).fetchall()
@@ -56,4 +64,20 @@ def test_trades_sums_cash_legs_in_eur_per_trade():
         (4, date(2026, 1, 9), Decimal("0.01"), True, Decimal("-5.128205")),
     ]
 
-    connection.close()
+
+def test_holdings_snapshot_uses_average_cost_on_sells(connection):
+    # In date order: buy 1 (513.675214) and reinvest 0.01 (5.128205) on 9 Jan -> 1.01 shares
+    # costing 518.803419. Selling 0.5 on 10 Jan keeps 0.51 / 1.01 of that cost.
+    # Latest close 500 USD at the latest rate 1.20: 0.51 * 500 / 1.20 = 212.50 EUR.
+    connection.execute("INSERT INTO prices VALUES (5, '2026-01-10', 500, 500, 'USD')")
+
+    [meta] = holdings_snapshot(connection, [2])
+
+    assert meta["ticker"] == "META"
+    assert meta["qty"] == Decimal("0.51")
+    assert round(meta["cost"], 6) == Decimal("261.970043")
+    assert round(meta["avg_cost_eur"], 2) == Decimal("513.67")
+    assert meta["value_eur"] == Decimal("212.5")
+    assert round(meta["unrealised_pnl_eur"], 6) == Decimal("-49.470043")
+    assert round(meta["unrealised_pnl_percent"], 2) == Decimal("-18.88")
+    assert meta["weight_pct"] == 100
