@@ -27,6 +27,7 @@ SELECTION = """
       )
 """
 
+
 def portfolio_value(connection, account_ids, asset_types=None, tickers=None, include_cash=True):
     """Total value in EUR per day of the selection, as (date, total_value) rows.
 
@@ -138,6 +139,47 @@ def holdings_snapshot(connection, account_ids, asset_types=None, tickers=None):
             "unrealised_pnl_percent": (sums["value"] - sums["cost"]) / sums["cost"] * 100,
             "weight_pct": (sums["value"] / total_value) * 100,
         })
-        result.sort(key=lambda row: row["value_eur"], reverse=True)
+    result.sort(key=lambda row: row["value_eur"], reverse=True)
     return result
 
+
+def allocation(connection, account_ids, by="asset_type", asset_types=None, tickers=None, include_cash=True):
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+    check_known(connection, "price_ticker", tickers)
+    check_known(connection, "asset_type", asset_types)
+
+    GROUPS = {
+        "asset_type": "COALESCE(i.asset_type, 'cash')",
+        "currency": "v.currency",
+        "account": "v.account_id",
+        "ticker": "COALESCE(i.price_ticker, 'cash')",
+    }
+    if by not in GROUPS:
+        raise ValueError(f"by must be one of {sorted(GROUPS)}")
+
+    rows = connection.execute(
+        f"""
+        SELECT {GROUPS[by]} AS grp, SUM(v.value_eur) AS value_eur
+        {SELECTION}
+        AND v.date = (SELECT MAX(date) FROM daily_valuation)
+        GROUP BY grp
+        ORDER BY value_eur DESC
+        """,
+        {
+            "account_ids": account_ids,
+            "tickers": tickers,
+            "asset_types": asset_types,
+            "include_cash": include_cash,
+        }
+    ).fetchall()
+
+    total = sum(value_eur for grp, value_eur in rows)
+    result = []
+    for grp, value in rows:
+        result.append({
+            "group": grp,
+            "value_eur": value,
+            "weight_pct": (value / total) * 100,
+        })
+    return result

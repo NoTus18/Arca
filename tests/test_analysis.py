@@ -4,7 +4,7 @@ from decimal import Decimal
 import duckdb
 import pytest
 
-from analysis.portfolio import portfolio_value
+from analysis.portfolio import allocation, portfolio_value
 from init_db import apply_sql_files
 
 
@@ -75,8 +75,8 @@ def test_portfolio_value_rejects_unknown_tickers_and_asset_types(connection):
         portfolio_value(connection, [1], asset_types=["ETF"])  # types are lowercase
 
 
-def test_portfolio_value_filters_by_ticker_asset_type_and_cash(connection):
-    # Account 1 on 5 Jan: 100 EUR cash, 2 x ETF1 at 10 = 20, 1 x STK1 at 30 = 30.
+def add_etf_and_stock(connection):
+    """Account 1 on 5 Jan: 100 EUR cash, 2 x ETF1 at 10 = 20, 1 x STK1 at 30 = 30."""
     connection.execute(
         """
         INSERT INTO instruments (instrument_id, isin, name, asset_type, currency, price_ticker)
@@ -92,6 +92,10 @@ def test_portfolio_value_filters_by_ticker_asset_type_and_cash(connection):
         """
     )
     connection.execute("INSERT INTO prices VALUES (1, '2026-01-05', 10, 10, 'EUR'), (2, '2026-01-05', 30, 30, 'EUR')")
+
+
+def test_portfolio_value_filters_by_ticker_asset_type_and_cash(connection):
+    add_etf_and_stock(connection)
 
     def first_day(**filters):
         return portfolio_value(connection, [1], **filters)[0][1]
@@ -126,6 +130,24 @@ def test_portfolio_value_raises_when_a_holding_has_no_price_yet(connection):
 
     # Cash alone is unaffected by the missing price.
     assert portfolio_value(connection, [1], include_cash=True, asset_types=[])[0] == (date(2026, 1, 5), Decimal("100"))
+
+
+def test_allocation_groups_todays_value_and_adds_up_to_100(connection):
+    add_etf_and_stock(connection)  # plus 50 EUR cash in account 2: 200 EUR in total
+
+    def by(group, **filters):
+        return [(row["group"], row["value_eur"], row["weight_pct"]) for row in allocation(connection, [1, 2], by=group, **filters)]
+
+    assert by("asset_type") == [
+        ("cash", Decimal("150"), Decimal("75")),
+        ("stock", Decimal("30"), Decimal("15")),
+        ("etf", Decimal("20"), Decimal("10")),
+    ]
+    assert by("account") == [(1, Decimal("150"), Decimal("75")), (2, Decimal("50"), Decimal("25"))]
+    assert by("ticker", include_cash=False) == [("STK1", Decimal("30"), Decimal("60")), ("ETF1", Decimal("20"), Decimal("40"))]
+
+    with pytest.raises(ValueError, match="by must be one of"):
+        allocation(connection, [1], by="nonsense")
 
 
 def test_portfolio_value_needs_accounts(connection):
