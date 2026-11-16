@@ -183,3 +183,57 @@ def allocation(connection, account_ids, by="asset_type", asset_types=None, ticke
             "weight_pct": (value / total) * 100,
         })
     return result
+
+def performance(connection, account_ids, asset_types=None, tickers=None):
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+    check_known(connection, "price_ticker", tickers)
+    check_known(connection, "asset_type", asset_types)
+
+    if asset_types is None and tickers is None:
+        rows = connection.execute(
+            """
+            SELECT t.event_date, SUM(CAST(tl.amount / CASE WHEN tl.currency = 'EUR' THEN 1 ELSE f.rate END AS DECIMAL(18, 6))) AS amount_eur
+            FROM transaction_legs tl
+            JOIN transactions t ON t.transaction_id = tl.transaction_id
+            LEFT JOIN daily_fx f ON f.quote_currency = tl.currency AND f.date = t.event_date
+            WHERE list_contains($account_ids, t.account_id)
+            AND tl.role IN ('deposit', 'withdrawal', 'reward')
+            GROUP BY t.event_date
+            """,
+            {"account_ids": account_ids},
+        ).fetchall()
+    else:
+        rows = connection.execute(
+            """
+            SELECT t.event_date, -SUM(t.cash_eur) AS amount_eur
+            FROM trades t
+            JOIN instruments i ON i.instrument_id = t.instrument_id
+            WHERE list_contains($account_ids, t.account_id)
+            AND ($tickers IS NULL OR list_contains($tickers, i.price_ticker))
+            AND ($asset_types IS NULL OR list_contains($asset_types, i.asset_type))
+            GROUP BY t.event_date
+            """,
+            {
+                "account_ids": account_ids,
+                "tickers": tickers,
+                "asset_types": asset_types,
+            }
+        ).fetchall()
+
+    flows = dict(rows)
+
+    include_cash = asset_types is None and tickers is None
+    value_rows = portfolio_value(connection, account_ids, asset_types=asset_types, tickers=tickers, include_cash=include_cash)
+    result = []
+    invested = Decimal(0)
+    for day, value in value_rows:
+        invested += flows.get(day, Decimal(0))
+        result.append({
+            "date": day,
+            "value_eur": value,
+            "invested_eur": invested,
+            "unrealised_pnl_eur": value - invested,
+            "unrealised_pnl_percent": (value - invested) / invested * 100 if invested > 0 else None,
+        })
+    return result

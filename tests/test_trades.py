@@ -4,7 +4,7 @@ from decimal import Decimal
 import duckdb
 import pytest
 
-from analysis.portfolio import holdings_snapshot
+from analysis.portfolio import holdings_snapshot, performance
 from init_db import apply_sql_files
 
 
@@ -81,3 +81,18 @@ def test_holdings_snapshot_uses_average_cost_on_sells(connection):
     assert round(meta["unrealised_pnl_eur"], 6) == Decimal("-49.470043")
     assert round(meta["unrealised_pnl_percent"], 2) == Decimal("-18.88")
     assert meta["weight_pct"] == 100
+
+
+def test_performance_holdings_view_counts_buys_minus_sells_as_invested(connection):
+    connection.execute("INSERT INTO prices VALUES (5, '2026-01-09', 600, 600, 'USD'), (5, '2026-01-10', 500, 500, 'USD')")
+
+    rows = performance(connection, [2], tickers=["META"])
+
+    def day(d):
+        row = next(row for row in rows if row["date"] == d)
+        return row["value_eur"], row["invested_eur"], row["unrealised_pnl_eur"]
+
+    # 9 Jan: 1.01 shares at 600 USD / 1.17; invested = buy 513.675214 + reinvest 5.128205.
+    assert day(date(2026, 1, 9)) == (Decimal("517.948718"), Decimal("518.803419"), Decimal("-0.854701"))
+    # 10 Jan: sold 0.5 for 290.833334, so invested drops by that; 0.51 shares at 500 USD / 1.20.
+    assert day(date(2026, 1, 10)) == (Decimal("212.5"), Decimal("227.970085"), Decimal("-15.470085"))

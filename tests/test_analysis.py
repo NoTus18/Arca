@@ -4,7 +4,7 @@ from decimal import Decimal
 import duckdb
 import pytest
 
-from analysis.portfolio import allocation, portfolio_value
+from analysis.portfolio import allocation, performance, portfolio_value
 from init_db import apply_sql_files
 
 
@@ -148,6 +148,17 @@ def test_allocation_groups_todays_value_and_adds_up_to_100(connection):
 
     with pytest.raises(ValueError, match="by must be one of"):
         allocation(connection, [1], by="nonsense")
+
+
+def test_performance_account_view_counts_deposits_as_invested(connection):
+    rows = performance(connection, [1, 2])
+
+    # 5 Jan: 100 deposited into account 1. 6 Jan: 50 more into account 2. Cash only, so no gain.
+    assert [(row["date"], row["value_eur"], row["invested_eur"]) for row in rows[:2]] == [
+        (date(2026, 1, 5), Decimal("100"), Decimal("100")),
+        (date(2026, 1, 6), Decimal("150"), Decimal("150")),
+    ]
+    assert rows[-1]["unrealised_pnl_eur"] == 0
 
 
 def test_portfolio_value_needs_accounts(connection):
