@@ -4,7 +4,7 @@ from decimal import Decimal
 import duckdb
 import pytest
 
-from analysis.portfolio import holdings_snapshot, performance
+from analysis.portfolio import dividends, fees, holdings_snapshot, performance
 from init_db import apply_sql_files
 
 
@@ -96,3 +96,54 @@ def test_performance_holdings_view_counts_buys_minus_sells_as_invested(connectio
     assert day(date(2026, 1, 9)) == (Decimal("517.948718"), Decimal("518.803419"), Decimal("-0.854701"))
     # 10 Jan: sold 0.5 for 290.833334, so invested drops by that; 0.51 shares at 500 USD / 1.20.
     assert day(date(2026, 1, 10)) == (Decimal("212.5"), Decimal("227.970085"), Decimal("-15.470085"))
+
+
+def test_dividends_split_gross_tax_and_net_in_eur(connection):
+    # Jan: 1.20 USD with 0.18 USD withheld. Feb: 2.40 USD, no tax. Rate 1.20 (latest known).
+    connection.execute(
+        """
+        INSERT INTO transactions (transaction_id, account_id, instrument_id, type, event_date)
+        VALUES (5, 2, 5, 'dividend', '2026-01-10'), (6, 2, 5, 'dividend', '2026-02-10')
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO transaction_legs (transaction_id, leg_number, role, amount, currency, source_file, source_id)
+        VALUES (5, 1, 'income', 1.20, 'USD', 'test.csv', 'div-jan'),
+               (5, 2, 'tax', -0.18, 'USD', 'test.csv', 'div-jan'),
+               (6, 1, 'income', 2.40, 'USD', 'test.csv', 'div-feb')
+        """
+    )
+
+    def rows(**kwargs):
+        return [(r["group"], r["gross_eur"], r["tax_eur"], r["net_eur"]) for r in dividends(connection, [2], **kwargs)]
+
+    assert rows() == [
+        ("2026-01", Decimal("1"), Decimal("-0.15"), Decimal("0.85")),
+        ("2026-02", Decimal("2"), Decimal("0"), Decimal("2")),
+    ]
+    assert rows(by="ticker") == [("META", Decimal("3"), Decimal("-0.15"), Decimal("2.85"))]
+    assert rows(by="year", asset_types=["stock"]) == [(2026, Decimal("3"), Decimal("-0.15"), Decimal("2.85"))]
+
+
+def test_performance_holdings_view_counts_dividends_as_money_back(connection):
+    connection.execute("INSERT INTO prices VALUES (5, '2026-01-09', 600, 600, 'USD'), (5, '2026-01-10', 500, 500, 'USD')")
+    connection.execute("INSERT INTO transactions (transaction_id, account_id, instrument_id, type, event_date) VALUES (5, 2, 5, 'dividend', '2026-01-10')")
+    connection.execute(
+        """
+        INSERT INTO transaction_legs (transaction_id, leg_number, role, amount, currency, source_file, source_id)
+        VALUES (5, 1, 'income', 1.20, 'USD', 'test.csv', 'div'), (5, 2, 'tax', -0.18, 'USD', 'test.csv', 'div')
+        """
+    )
+
+    jan_10 = next(row for row in performance(connection, [2], tickers=["META"]) if row["date"] == date(2026, 1, 10))
+
+    # Without the dividend invested is 227.970085 (see the test above); the net 0.85 EUR comes back.
+    assert jan_10["invested_eur"] == Decimal("227.120085")
+
+
+def test_fees_include_trade_and_conversion_fees(connection):
+    # Buy fee 1 USD / 1.17, conversion fee 2 EUR, sell fee 1 USD / 1.20.
+    by_type = {row["group"]: row["fees_eur"] for row in fees(connection, [2], by="type")}
+    assert by_type == {"buy": Decimal("-0.854701"), "conversion": Decimal("-2"), "sell": Decimal("-0.833333")}
+    assert fees(connection, [2]) == [{"group": 2026, "fees_eur": Decimal("-3.688034")}]

@@ -224,6 +224,11 @@ def performance(connection, account_ids, asset_types=None, tickers=None):
     flows = dict(rows)
 
     include_cash = asset_types is None and tickers is None
+    if not include_cash:
+        # Holdings view: dividends are money coming back, like sell proceeds. The account
+        # view needs nothing, since they already sit in the cash it counts.
+        for row in dividends(connection, account_ids, by="date", asset_types=asset_types, tickers=tickers):
+            flows[row["group"]] = flows.get(row["group"], Decimal(0)) - row["net_eur"]
     value_rows = portfolio_value(connection, account_ids, asset_types=asset_types, tickers=tickers, include_cash=include_cash)
     result = []
     invested = Decimal(0)
@@ -237,3 +242,89 @@ def performance(connection, account_ids, asset_types=None, tickers=None):
             "unrealised_pnl_percent": (value - invested) / invested * 100 if invested > 0 else None,
         })
     return result
+
+
+def dividends(connection, account_ids, by="month", asset_types=None, tickers=None):
+    """Dividends in EUR per group, as gross, withholding tax (negative) and net."""
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+    check_known(connection, "price_ticker", tickers)
+    check_known(connection, "asset_type", asset_types)
+
+    GROUPS = {
+        "date": "t.event_date",
+        "month": "strftime(t.event_date, '%Y-%m')",
+        "year": "year(t.event_date)",
+        "ticker": "i.price_ticker",
+    }
+    if by not in GROUPS:
+        raise ValueError(f"by must be one of {sorted(GROUPS)}")
+
+    rows = connection.execute(
+        f"""
+        WITH legs AS (
+            SELECT {GROUPS[by]} AS grp, tl.role,
+                   CAST(tl.amount / CASE WHEN tl.currency = 'EUR' THEN 1 ELSE f.rate END AS DECIMAL(18, 6)) AS amount_eur
+            FROM transaction_legs tl
+            JOIN transactions t ON t.transaction_id = tl.transaction_id
+            JOIN instruments i ON i.instrument_id = t.instrument_id
+            LEFT JOIN daily_fx f ON f.quote_currency = tl.currency AND f.date = t.event_date
+            WHERE t.type = 'dividend'
+              AND tl.role IN ('income', 'tax')
+              AND list_contains($account_ids, t.account_id)
+              AND ($tickers IS NULL OR list_contains($tickers, i.price_ticker))
+              AND ($asset_types IS NULL OR list_contains($asset_types, i.asset_type))
+        )
+        SELECT grp,
+               COALESCE(SUM(amount_eur) FILTER (WHERE role = 'income'), 0) AS gross_eur,
+               COALESCE(SUM(amount_eur) FILTER (WHERE role = 'tax'), 0) AS tax_eur
+        FROM legs
+        GROUP BY grp
+        ORDER BY grp
+        """,
+        {
+            "account_ids": account_ids,
+            "tickers": tickers,
+            "asset_types": asset_types,
+        },
+    ).fetchall()
+
+    return [
+        {"group": grp, "gross_eur": gross, "tax_eur": tax, "net_eur": gross + tax}
+        for grp, gross, tax in rows
+    ]
+
+
+def fees(connection, account_ids, by="year"):
+    """Fees paid in EUR per group, as negative amounts. Includes currency conversion fees.
+
+    No holdings filter: conversion fees belong to no instrument.
+    """
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+
+    GROUPS = {
+        "month": "strftime(t.event_date, '%Y-%m')",
+        "year": "year(t.event_date)",
+        "account": "t.account_id",
+        "type": "t.type",
+    }
+    if by not in GROUPS:
+        raise ValueError(f"by must be one of {sorted(GROUPS)}")
+
+    rows = connection.execute(
+        f"""
+        SELECT {GROUPS[by]} AS grp,
+               SUM(CAST(tl.amount / CASE WHEN tl.currency = 'EUR' THEN 1 ELSE f.rate END AS DECIMAL(18, 6))) AS fees_eur
+        FROM transaction_legs tl
+        JOIN transactions t ON t.transaction_id = tl.transaction_id
+        LEFT JOIN daily_fx f ON f.quote_currency = tl.currency AND f.date = t.event_date
+        WHERE tl.role = 'fee'
+          AND list_contains($account_ids, t.account_id)
+        GROUP BY grp
+        ORDER BY grp
+        """,
+        {"account_ids": account_ids},
+    ).fetchall()
+
+    return [{"group": grp, "fees_eur": amount} for grp, amount in rows]
