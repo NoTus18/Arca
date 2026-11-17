@@ -4,7 +4,7 @@ from decimal import Decimal
 import duckdb
 import pytest
 
-from analysis.portfolio import dividends, fees, holdings_snapshot, performance
+from analysis.portfolio import dividends, fees, holdings_snapshot, performance, realised_gains
 from init_db import apply_sql_files
 
 
@@ -81,6 +81,13 @@ def test_holdings_snapshot_uses_average_cost_on_sells(connection):
     assert round(meta["unrealised_pnl_eur"], 6) == Decimal("-49.470043")
     assert round(meta["unrealised_pnl_percent"], 2) == Decimal("-18.88")
     assert meta["weight_pct"] == 100
+
+
+def test_realised_gains_use_average_cost_of_sold_shares(connection):
+    # Sold 0.5 of 1.01 shares costing 518.803419: cost 256.833376, proceeds 290.833334.
+    [meta] = realised_gains(connection, [2])
+    assert meta["ticker"] == "META"
+    assert round(meta["realised_eur"], 6) == Decimal("33.999958")
 
 
 def test_performance_holdings_view_counts_buys_minus_sells_as_invested(connection):

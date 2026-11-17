@@ -70,12 +70,7 @@ def portfolio_value(connection, account_ids, asset_types=None, tickers=None, inc
     ).fetchall()
 
 
-def holdings_snapshot(connection, account_ids, asset_types=None, tickers=None):
-    if not account_ids:
-        raise ValueError("account_ids cannot be empty")
-    check_known(connection, "price_ticker", tickers)
-    check_known(connection, "asset_type", asset_types)
-
+def average_cost_positions(connection, account_ids, asset_types=None, tickers=None):
     rows = connection.execute(
         """
         SELECT t.account_id, i.price_ticker, t.quantity, t.cash_eur FROM trades t
@@ -95,14 +90,29 @@ def holdings_snapshot(connection, account_ids, asset_types=None, tickers=None):
 
     positions = {}
     for account_id, ticker, quantity, cash_eur in rows:
-        position = positions.setdefault((account_id, ticker), {"qty": Decimal(0), "cost": Decimal(0)})
+        position = positions.setdefault(
+            (account_id, ticker), {"qty": Decimal(0), "cost": Decimal(0), "realised": Decimal(0)}
+        )
         if quantity > 0:
             position["qty"] += quantity
             position["cost"] += -(cash_eur)
         else:
+            # Average cost: the sold shares take their share of the cost, at the qty before the sale.
             sold = -quantity
-            position["cost"] -= position["cost"] * sold / position["qty"]
+            sold_cost = position["cost"] * sold / position["qty"]
+            position["realised"] += cash_eur - sold_cost
+            position["cost"] -= sold_cost
             position["qty"] -= sold
+    return positions
+
+
+def holdings_snapshot(connection, account_ids, asset_types=None, tickers=None):
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+    check_known(connection, "price_ticker", tickers)
+    check_known(connection, "asset_type", asset_types)
+
+    positions = average_cost_positions(connection, account_ids, asset_types, tickers)
 
     value_rows = connection.execute(
         f"""
@@ -141,6 +151,23 @@ def holdings_snapshot(connection, account_ids, asset_types=None, tickers=None):
         })
     result.sort(key=lambda row: row["value_eur"], reverse=True)
     return result
+
+
+def realised_gains(connection, account_ids, asset_types=None, tickers=None):
+    """Realised gain in EUR per ticker from sells at average cost, fully sold tickers included."""
+    if not account_ids:
+        raise ValueError("account_ids cannot be empty")
+    check_known(connection, "price_ticker", tickers)
+    check_known(connection, "asset_type", asset_types)
+
+    by_ticker = {}
+    for (_, ticker), position in average_cost_positions(connection, account_ids, asset_types, tickers).items():
+        by_ticker[ticker] = by_ticker.get(ticker, Decimal(0)) + position["realised"]
+    return [
+        {"ticker": ticker, "realised_eur": realised}
+        for ticker, realised in sorted(by_ticker.items())
+        if realised != 0
+    ]
 
 
 def allocation(connection, account_ids, by="asset_type", asset_types=None, tickers=None, include_cash=True):
