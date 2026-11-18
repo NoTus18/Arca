@@ -1,3 +1,5 @@
+dash==4.5.0
+dash-mantine-components==2.8.1
 duckdb==2.0.0
 iniconfig==2.3.1
 packaging==26.3

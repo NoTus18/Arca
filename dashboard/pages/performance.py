@@ -1,0 +1,159 @@
+from datetime import date, timedelta
+from decimal import Decimal
+
+import dash
+import dash_mantine_components as dmc
+from dash import Input, Output, callback, html
+
+from analysis import portfolio
+from dashboard import components as ui
+from dashboard import data
+
+dash.register_page(__name__, path="/performance", name="Performance", order=2)
+
+RANGES = ["1M", "3M", "6M", "YTD", "1Y", "All"]
+
+layout = html.Div(
+    [
+        ui.page_header(
+            "Performance",
+            "Value against the money put in, day by day.",
+            right=dmc.SegmentedControl(id="performance-range", data=RANGES, value="All",
+                                       persistence=True, persistence_type="local"),
+        ),
+        html.Div(id="performance-content"),
+    ]
+)
+
+
+def range_start(choice, last):
+    if choice == "YTD":
+        return date(last.year, 1, 1)
+    days = {"1M": 30, "3M": 91, "6M": 182, "1Y": 365}.get(choice)
+    return last - timedelta(days=days) if days else None
+
+
+def money_in_card(total, breakdown, holdings_view, dividends_in_gain):
+    """The money put in, with what it's made of on hover."""
+    label = "Net bought" if holdings_view else "Money put in"
+    lines = [dmc.Group([dmc.Text(name, size="sm"), dmc.Text(ui.eur(amount), size="sm", className="num")],
+                       justify="space-between") for name, amount in breakdown]
+    lines.append(dmc.Group([dmc.Text("Total", size="sm", fw=650), dmc.Text(ui.eur(total), size="sm", fw=650)],
+                           justify="space-between", className="breakdown-total"))
+    if not holdings_view and dividends_in_gain:
+        lines.append(dmc.Text(f"Dividends of {ui.eur(dividends_in_gain)} were paid into the accounts, so they "
+                              "count in the gain, not here.", size="xs", c="dimmed"))
+    return dmc.HoverCard(
+        [dmc.HoverCardTarget(html.Div(ui.stat(label, ui.eur(total), dmc.Text("Hover for the breakdown", size="xs",
+                                                                             c="dimmed")),
+                                      className="has-breakdown", tabIndex=0)),
+         dmc.HoverCardDropdown(dmc.Stack(lines or [dmc.Text("No money in or out in this period", size="sm")],
+                                         gap=6))],
+        width=300, shadow="md", position="bottom-start", withArrow=True, openDelay=100,
+    )
+
+
+@callback(Output("performance-content", "children"), *ui.FILTERS, Input("performance-range", "value"))
+@ui.guarded
+def render(accounts, asset_types, tickers, choice):
+    account_ids, asset_types, tickers = data.selection(accounts, asset_types, tickers)
+    if not account_ids:
+        return ui.no_accounts()
+    holdings_view = data.is_holdings_view(asset_types, tickers)
+
+    with data.connect() as connection:
+        history = portfolio.performance(connection, account_ids, asset_types, tickers)
+        names = data.accounts(connection)
+        per_account = {
+            account_id: portfolio.portfolio_value(connection, [account_id], asset_types, tickers,
+                                                  include_cash=not holdings_view)
+            for account_id in account_ids
+        }
+
+    if not history:
+        return ui.empty("Nothing to show yet", "Run python update_all.py to import your exports.")
+
+    start = range_start(choice, history[-1]["date"])
+    index = next((i for i, r in enumerate(history) if start is None or r["date"] >= start), len(history) - 1)
+    shown, last = history[index:], history[-1]
+    # Changes are measured from the close before the range; "All" starts from nothing.
+    base = history[index - 1] if index > 0 else {"value_eur": Decimal(0), "invested_eur": Decimal(0),
+                                                 "unrealised_pnl_eur": Decimal(0)}
+    invested_label = "Net invested" if holdings_view else "Deposited"
+
+    # Start value + money put in + gain = value now, so new deposits never count as gain.
+    gain_change = last["unrealised_pnl_eur"] - base["unrealised_pnl_eur"]
+    money_in = last["invested_eur"] - base["invested_eur"]
+    after = base["date"] if index > 0 else date.min
+    with data.connect() as connection:
+        breakdown = data.money_in_breakdown(connection, account_ids, asset_types, tickers, after, last["date"])
+        dividends_in_gain = data.dividends_between(connection, account_ids, asset_types, tickers, after, last["date"])
+    note = lambda text: dmc.Text(text, size="xs", c="dimmed")
+
+    all_time = f"{ui.pct(last['unrealised_pnl_percent'], signed=True)} on " \
+               f"{ui.eur(last['invested_eur'], decimals=0)} {invested_label.lower()}, all time"
+    end = f"{last['date']:%-d %b %Y}"
+    cards = [
+        ui.stat("Gain" if index == 0 else f"Gain, {base['date']:%-d %b %Y} to {end}",
+                ui.signed_text(ui.eur(gain_change, signed=True), gain_change, className="stat-value"),
+                note(all_time if index == 0 else "Value change, not counting money put in")),
+    ]
+    if index > 0:  # on "All" the start is always €0
+        cards.append(ui.stat("Value at start", ui.eur(base["value_eur"]), note(f"Close on {base['date']:%-d %b %Y}")))
+    cards += [
+        ui.stat("Value at end", ui.eur(last["value_eur"]), note(end if index == 0 else all_time)),
+        money_in_card(money_in, breakdown, holdings_view, dividends_in_gain),
+    ]
+    summary = dmc.SimpleGrid(cards, cols={"base": 2, "md": len(cards)}, spacing="lg")
+
+    rows = [{"date": r["date"].isoformat(),
+             "value": data.num(r["value_eur"]),
+             "invested": data.num(r["invested_eur"]),
+             "gain": data.num(r["unrealised_pnl_eur"]),
+             "gain_pct": data.num(r["unrealised_pnl_percent"])} for r in shown]
+
+    value_chart = ui.time_chart(
+        rows,
+        [{"name": "value", "label": "Value", "color": ui.SERIES[0], "type": "area"},
+         {"name": "invested", "label": invested_label, "color": ui.SERIES[1], "type": "line", "strokeDasharray": "5 4"}],
+        kind=dmc.CompositeChart, h=320,
+    )
+    gain_chart = ui.time_chart(
+        rows, [{"name": "gain", "label": "Gain", "color": ui.SERIES[0]}],
+        type="split", splitColors=[ui.GOOD, ui.BAD], h=220,
+    )
+    gain_pct_chart = ui.time_chart(
+        rows, [{"name": "gain_pct", "label": "Gain %", "color": ui.SERIES[0]}],
+        kind=dmc.LineChart, h=220,
+        valueFormatter={"function": "pct"},
+        yAxisProps={"tickFormatter": {"function": "pct"}, "width": 56},
+        referenceLines=[{"y": 0, "color": "var(--arca-ink-soft)"}],
+    )
+
+    accounts_series = [{"name": names[a], "color": ui.SERIES[(a - 1) % len(ui.SERIES)]} for a in account_ids]
+    by_date = {}
+    for account_id, values in per_account.items():
+        for day, value in values:
+            if start is None or day >= start:
+                # An account adds 0 before its first transaction, so the stack stays continuous.
+                row = by_date.setdefault(day, {"date": day.isoformat(), **{s["name"]: 0 for s in accounts_series}})
+                row[names[account_id]] = data.num(value)
+    accounts_chart = ui.time_chart([by_date[d] for d in sorted(by_date)], accounts_series, type="stacked", h=280)
+
+    return dmc.Stack(
+        [
+            ui.panel(summary),
+            ui.panel(dmc.Stack([ui.legend([("Value", ui.SERIES[0]), (invested_label, ui.SERIES[1])]), value_chart]),
+                     title="Value and money in",
+                     description="Money in counts deposits and withdrawals." if not holdings_view else
+                     "Net invested is buys minus sales and dividends of the selected holdings."),
+            dmc.SimpleGrid(
+                [ui.panel(gain_chart, title="Gain in euros", description="Value minus money in."),
+                 ui.panel(gain_pct_chart, title="Gain as a percentage", description="Gain over money in.")],
+                cols={"base": 1, "md": 2}, spacing="lg",
+            ),
+            ui.panel(dmc.Stack([ui.legend([(s["name"], s["color"]) for s in accounts_series]), accounts_chart]),
+                     title="Value by account", description="Stacked, so the top line is the total."),
+        ],
+        gap="lg",
+    )

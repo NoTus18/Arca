@@ -1,0 +1,229 @@
+/* Tokens. Light first; dark under [data-mantine-color-scheme="dark"] (set by the theme switch). */
+:root {
+    --arca-canvas: #f3f4f7;
+    --arca-rule: #e2e5ea;
+    --arca-ink-soft: #5b6576;
+    --arca-brass: #b88a28;
+
+    /* Categorical slots, fixed order (validated reference palette). */
+    --arca-series-1: #2a78d6;
+    --arca-series-2: #eb6834;
+    --arca-series-3: #1baf7a;
+    --arca-series-4: #eda100;
+    --arca-series-5: #e87ba4;
+    --arca-series-6: #008300;
+    --arca-series-7: #6250d6;
+    --arca-series-8: #e34948;
+
+    /* Gain/loss marks, and darker steps for text so it stays readable. */
+    --arca-good: #0ca30c;
+    --arca-bad: #d03b3b;
+    --arca-good-text: #18782f;
+    --arca-bad-text: #c0302f;
+}
+
+:root[data-mantine-color-scheme="dark"] {
+    --arca-canvas: #141921;
+    --arca-rule: #2b3340;
+    --arca-ink-soft: #93a0b2;
+    --arca-brass: #d0aa4c;
+
+    --arca-series-1: #3987e5;
+    --arca-series-2: #d95926;
+    --arca-series-3: #199e70;
+    --arca-series-4: #c98500;
+    --arca-series-5: #d55181;
+    --arca-series-6: #0ca30c;
+    --arca-series-7: #9085e9;
+    --arca-series-8: #e66767;
+
+    --arca-good-text: #5ccb76;
+    --arca-bad-text: #f07a78;
+}
+
+body {
+    font-feature-settings: "ss01";
+}
+
+.canvas {
+    background: var(--arca-canvas);
+    min-height: 100vh;
+}
+
+/* Tabular figures line up columns; outside tables they space out the punctuation. */
+.arca-table .num,
+.bridge-row .num {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Brand */
+.brand-link {
+    text-decoration: none;
+    color: inherit;
+}
+
+.brand {
+    font-weight: 750;
+    font-size: 1.15rem;
+    letter-spacing: -0.02em;
+}
+
+.brand-mark {
+    width: 14px;
+    height: 18px;
+    border-radius: 3px 3px 2px 2px;
+    background: var(--arca-brass);
+    box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.18);
+}
+
+/* Navigation: brass rule marks the current page. */
+.nav-link {
+    border-radius: var(--mantine-radius-sm);
+    font-weight: 500;
+    border-left: 2px solid transparent;
+}
+
+.nav-link[data-active] {
+    border-left-color: var(--arca-brass);
+}
+
+/* Type scale */
+.page-title {
+    font-size: 1.75rem;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+}
+
+.panel-title {
+    font-size: 1rem;
+    font-weight: 650;
+}
+
+.hero-value {
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 1;
+}
+
+.stat-value {
+    font-size: 1.35rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+}
+
+.tone-up { color: var(--arca-good-text); }
+.tone-down { color: var(--arca-bad-text); }
+.tone-flat { color: var(--arca-ink-soft); }
+
+.panel {
+    border-color: var(--arca-rule);
+}
+
+.arca-table th {
+    font-weight: 600;
+    font-size: var(--mantine-font-size-xs);
+    color: var(--arca-ink-soft);
+    white-space: nowrap;
+}
+
+.arca-table td {
+    white-space: nowrap;
+}
+
+.swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+/* Gain bridge: one row per source, bars grow left (loss) or right (gain) from a shared zero. */
+.bridge-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1.3fr) minmax(120px, 2fr) minmax(96px, auto);
+    align-items: center;
+    gap: var(--mantine-spacing-md);
+    padding: 10px 0;
+    border-bottom: 1px solid var(--arca-rule);
+}
+
+.bridge-row:last-child {
+    border-bottom: none;
+}
+
+.bridge-total {
+    border-top: 2px solid var(--mantine-color-text);
+    border-bottom: none;
+    font-weight: 650;
+}
+
+.bridge-track {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    height: 12px;
+}
+
+.bridge-track > div {
+    position: relative;
+}
+
+.bridge-track > div:first-child {
+    border-right: 2px solid var(--arca-ink-soft);
+}
+
+.bridge-bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+}
+
+.bridge-bar.down {
+    right: 0;
+    background: var(--arca-bad);
+    border-radius: 4px 0 0 4px;
+}
+
+.bridge-bar.up {
+    left: 0;
+    background: var(--arca-good);
+    border-radius: 0 4px 4px 0;
+}
+
+@media (max-width: 36em) {
+    .bridge-row {
+        grid-template-columns: 1fr auto;
+    }
+
+    .bridge-track {
+        grid-column: 1 / -1;
+        order: 3;
+    }
+
+    .bridge-total > div:nth-child(2) {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * {
+        transition: none !important;
+        animation: none !important;
+    }
+}
+
+/* A stat with more detail on hover: dotted underline hints at it. */
+.has-breakdown {
+    cursor: help;
+    border-radius: var(--mantine-radius-sm);
+}
+
+.has-breakdown .stat > p:first-child {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
+.breakdown-total {
+    border-top: 1px solid var(--arca-rule);
+    padding-top: 6px;
+}
