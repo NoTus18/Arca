@@ -9,7 +9,7 @@ import duckdb
 
 import run_imports
 from init_db import DATABASE_FILE
-from market_data import fx, prices
+from market_data import exposures, fx, prices
 
 def main():
     parser = argparse.ArgumentParser(description="Update all data in the database.")
@@ -29,6 +29,10 @@ def main():
         price_count = prices.run(connection, fetch=not args.offline)
         print(f"\nSaved {price_count} prices")
         prices.print_summary(connection)
+
+        exposure_count = exposures.run(connection, fetch=not args.offline)
+        print(f"\nSaved {exposure_count} exposure rows")
+        exposures.print_summary(connection)
 
 if __name__ == "__main__":
     main()

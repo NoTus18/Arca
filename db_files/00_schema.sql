@@ -82,3 +82,13 @@ CREATE TABLE IF NOT EXISTS import_runs (
 
   PRIMARY KEY (broker)
 );
+
+CREATE TABLE IF NOT EXISTS exposures (
+  instrument_id INTEGER NOT NULL,
+  kind VARCHAR(255) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  weight DECIMAL(9, 6) NOT NULL,
+  source VARCHAR(255) NOT NULL,
+
+  PRIMARY KEY (instrument_id, kind, name)
+);
