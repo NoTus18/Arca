@@ -22,6 +22,32 @@ That makes simple questions hard to answer:
 Arca brings every account into one database so I can answer these myself. It's also
 a place to learn: I'm writing the code by hand and documenting each week's progress.
 
+## What it looks like
+
+A local dashboard reads the database. The sidebar picks the accounts, asset types and
+holdings, and every page follows that selection.
+
+The overview shows the total across all three brokers against what I deposited, and
+breaks the gain down into price gains, realised sales, dividends and fees.
+
+![Overview](docs/screenshots/overview.png)
+
+Performance shows value, gain in euros and gain in percent over a chosen range.
+
+![Performance](docs/screenshots/performance.png)
+
+Allocation splits the latest value by asset type, currency, account or holding. It
+can also look through funds to the countries and sectors they hold, so a world ETF
+counts towards North America, Europe and Asia-Pacific instead of showing up as one
+block.
+
+![Allocation by region](docs/screenshots/allocation.png)
+
+Dividends & fees shows what I received each month, what was withheld in tax, and
+what I paid the brokers.
+
+![Dividends and fees](docs/screenshots/income.png)
+
 ## How it works
 
 Every app exports its history in a different format. Arca converts each export into
@@ -55,8 +81,8 @@ exchange rates, prices ──► market_data/ ───────────�
 | Exchange rates (ECB)          | Done        |
 | Daily prices (Yahoo Finance)  | Done        |
 | Valuation over time           | Done        |
-| Analysis functions            | Next        |
-| Dashboard                     | Planned     |
+| Analysis functions            | Done        |
+| Dashboard                     | Done        |
 | Data science                  | Planned     |
 
 ## Project structure
@@ -65,6 +91,8 @@ exchange rates, prices ──► market_data/ ───────────�
 db_files/           schema and views, applied in name order by init_db.py
 importers/          one importer per broker, plus shared helpers in common.py
 market_data/        exchange rates (fx.py) and prices (prices.py)
+analysis/           portfolio calculations on a selection of accounts
+dashboard/          the Dash app, with one file per page in dashboard/pages/
 reference/          example of the instrument reference file
 tests/              tests and made-up sample exports in tests/fixtures/
 docs/decisions.md   design decisions and why I made them
@@ -117,6 +145,31 @@ exchange rates and prices up to today. It creates the database if needed.
 |-------------|---------------------------------------------------------------|
 | `--offline` | Rebuild exchange rates and prices from the cache, no download |
 | `--force`   | Re-import every broker, changed or not                        |
+
+### Open the dashboard
+
+    python -m dashboard.app
+
+Or run `python start.py` to update everything first (same `--offline` and `--force`
+options as `update_all.py`), then open the dashboard.
+
+Then open http://127.0.0.1:8050. It opens the database read-only, and only while a
+page loads, so `update_all.py` can run while it's open. If a page loads in the middle
+of an update, it says the database is busy; reload it when the update has finished.
+
+| Page             | What it shows                                                       |
+|------------------|---------------------------------------------------------------------|
+| Overview         | Total value, value against deposits, and where the gain came from   |
+| Holdings         | Open positions at average cost, and gains realised on sales         |
+| Performance      | Value, gain and gain % over a chosen range, and value per account   |
+| Allocation       | The latest value by asset type, currency, account or holding, or looked through funds by region, country, market (developed or emerging) or sector |
+| Dividends & fees | Dividends before and after tax, and fees, by month, year and more   |
+| Activity         | Every transaction, searchable, with the cash it moved               |
+| Data             | Last imports, how old each price and exchange rate is, and how old and complete each fund's country weights are |
+
+The sidebar picks which accounts, asset types and holdings every page uses. To add a
+page, add a file to `dashboard/pages/` that calls `dash.register_page`; it appears in
+the sidebar by itself.
 
 ### Run one step on its own
 

@@ -50,6 +50,27 @@ right for valuing holdings, since dividends are already recorded as cash.
 `adj_close` also includes dividends, so using it for valuation would count them
 twice. It's kept for comparing total returns later.
 
+## Decimal for money, float only for charts
+Amounts are Decimal from the importer to the analysis functions, so sums don't pick
+up rounding errors. Plotly needs JSON, so `num` in `dashboard/data.py`
+turns values into floats for chart data only, and nothing is added up after
+that.
+
+## Imports skip brokers that haven't changed
+`run_imports.py` hashes each broker's CSV files and its importer code, and
+stores both in `import_runs`. A broker is re-imported only when one of them
+changes, or with `--force`. Deleting the database re-imports everything.
+
+## Realised gains at average cost
+Each holding has one average price. A sale takes its share of the cost at that
+price, and the rest is the realised gain. It's simpler than tracking lots and
+enough to see how a holding did.
+
+## The dashboard opens the database read-only, per page load
+DuckDB allows one writer per file. The dashboard connects read-only and only
+while a page loads, so `update_all.py` can write while the dashboard is open.
+If a page loads mid-update, it says the database is busy rather than failing.
+
 ## Gaps are filled with the latest value
 Markets and the ECB don't publish every day. The daily views use the latest
 price and rate on or before each day, and keep `price_date` and `rate_date`, so
@@ -59,3 +80,22 @@ it's always visible how old a value is.
 Every view keeps `account_id` and stores no combined totals. Analysis functions
 take a list of accounts and add them up at the end, so any combination works,
 and percentages are always calculated from the selected accounts.
+
+## Country weights: geographic regions, MSCI market type, Unclassified kept
+Funds are looked through to countries with weights in `exposures`. Sectors and
+stock countries come from Yahoo Finance on every update; fund countries come
+from factsheets in `data/reference/exposures.csv`, because no issuer offers a
+stable download (iShares broke its holdings file link in a site redesign).
+Each factsheet row keeps its date, and the Data page flags weights older than a
+year.
+
+Regions are purely geographic, from `reference/countries.csv`, so Mexico is
+Latin America and Taiwan is Asia-Pacific however its market is classed.
+Developed vs emerging is a separate view, and it needs one source because index
+providers disagree (FTSE calls South Korea and Poland developed, MSCI emerging).
+I use MSCI, which reviews its list each June.
+
+Weight a factsheet doesn't list is stored as Unclassified, shown last and in
+grey, and never spread over the listed countries: spreading it would invent
+data, since a fund's unlisted part is often a different region from its top
+ten.
