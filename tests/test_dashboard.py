@@ -96,3 +96,30 @@ def test_every_month_fills_months_without_dividends():
 def test_activity_shows_sub_cent_amounts():
     assert activity.decimals(Decimal("0.0018")) == 4
     assert activity.decimals(Decimal("0.73")) == 2
+
+
+def test_allocation_looks_through_to_sector_weights():
+    # META has a sector but no country, so the country view has nothing to spread.
+    with duckdb.connect(data.DATABASE) as connection:
+        connection.execute("INSERT INTO exposures (instrument_id, kind, name, weight, source) "
+                           "VALUES (5, 'sector', 'technology', 1, 'yfinance')")
+    sector = rendered(allocation.render(["2"], None, None, "sector", True))
+    assert "Technology" in sector and "€512.82" in sector and "Leaves out" not in sector
+    assert "No country weights" in rendered(allocation.render(["2"], None, None, "country", True))
+
+
+def test_fees_show_which_kind_of_transaction_they_came_from():
+    page = rendered(income.render_fees(["2"], None, None, "year"))
+    assert "Currency conversion" in page and "€2.00" in page
+
+
+def test_overview_bridge_shows_trading_fees_on_their_own_line():
+    # A $1 fee on the META buy: the price gain stays (600 - 580) / 1.17 = 17.09 before fees,
+    # and the fee shows as 1 / 1.17 = 0.85 instead of hiding inside the average cost.
+    with duckdb.connect(data.DATABASE) as connection:
+        connection.execute("INSERT INTO transaction_legs (transaction_id, leg_number, role, amount, currency, source_file, "
+                           "source_id) VALUES (3, 3, 'fee', -1, 'USD', 't.csv', 'b')")
+    page = rendered(overview.render(["2"], None, None))
+    for text in ("+€17.09", "−€0.85", "Trading fees", "−€2.00"):
+        assert text in page
+    assert "Currency moves and other" not in page

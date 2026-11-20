@@ -13,8 +13,17 @@ log = logging.getLogger(__name__)
 SERIES = [f"var(--arca-series-{n})" for n in range(1, 9)]
 GOOD = "var(--arca-good)"
 BAD = "var(--arca-bad)"
+UNCLASSIFIED = "var(--arca-unclassified)"  # grey: weight no source lists, not a real group
 
 ASSET_TYPE_LABELS = {"etf": "ETFs", "stock": "Stocks", "reit": "REITs", "cash": "Cash"}
+
+# Sector keys as exposures stores them. The order fixes each sector's colour.
+SECTOR_LABELS = {
+    "technology": "Technology", "financial_services": "Financial services", "healthcare": "Healthcare",
+    "consumer_cyclical": "Consumer cyclical", "communication_services": "Communication services",
+    "industrials": "Industrials", "consumer_defensive": "Consumer defensive", "energy": "Energy",
+    "basic_materials": "Basic materials", "utilities": "Utilities", "realestate": "Real estate",
+}
 
 
 def eur(value, signed=False, decimals=2):
@@ -44,6 +53,10 @@ def signed_text(text, value, className="", **props):
 
 def asset_type_label(asset_type):
     return ASSET_TYPE_LABELS.get(asset_type, str(asset_type).title())
+
+
+def sector_label(sector):
+    return SECTOR_LABELS.get(sector, str(sector).replace("_", " ").capitalize())
 
 
 def page_header(title, description=None, right=None):

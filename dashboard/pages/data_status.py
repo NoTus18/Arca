@@ -10,6 +10,8 @@ from dashboard import data
 dash.register_page(__name__, path="/data", name="Data", order=9)
 
 STALE_AFTER_DAYS = 5  # a weekend plus a holiday is normal; more than that usually means a broken ticker
+WEIGHTS_STALE_AFTER_DAYS = 365  # hand-written country weights are refreshed once a year
+UNCLASSIFIED_WARN = 0.10
 
 
 def layout(**_):
@@ -35,6 +37,18 @@ def age_badge(last, today):
     return dmc.Badge("Up to date", color="green", variant="light", radius="sm")
 
 
+def weights_badge(source, as_of, unclassified, countries, today):
+    if not countries:
+        return dmc.Badge("No country weights", color="red", variant="light", radius="sm")
+    if source == "reference" and as_of is None:
+        return dmc.Badge("No date", color="orange", variant="light", radius="sm")
+    if as_of and (today - as_of).days > WEIGHTS_STALE_AFTER_DAYS:
+        return dmc.Badge(f"{(today - as_of).days // 30} months old", color="orange", variant="light", radius="sm")
+    if unclassified > UNCLASSIFIED_WARN:
+        return dmc.Badge(f"{ui.pct(unclassified * 100)} unclassified", color="orange", variant="light", radius="sm")
+    return dmc.Badge("Up to date", color="green", variant="light", radius="sm")
+
+
 @ui.guarded
 def content():
     today = date.today()
@@ -45,6 +59,7 @@ def content():
         unvalued = data.unvalued_positions(connection)
         counts = data.table_counts(connection)
         names = data.accounts(connection)
+        weights = data.exposure_freshness(connection)
 
     problems = [p for p in prices if p[4] and (p[3] is None or (today - p[3]).days > STALE_AFTER_DAYS)]
     if unvalued or problems:
@@ -91,6 +106,21 @@ def content():
                      for ticker, name, currency, last, held in prices],
                 ),
                 title="Prices", description="Daily closes from Yahoo Finance. Weekends use Friday's close.",
+            ),
+            ui.panel(
+                ui.table(
+                    ["Instrument", "Source", "As of", "Unclassified", "Status"],
+                    [[dmc.Stack([dmc.Text(name, size="sm"), dmc.Text(ticker, size="xs", c="dimmed")], gap=0),
+                      {"reference": "Factsheet", "yfinance": "Yahoo Finance"}.get(source, source or "–"),
+                      f"{as_of:%-d %b %Y}" if as_of else ("Every update" if source == "yfinance" else "–"),
+                      ui.pct(unclassified * 100),
+                      weights_badge(source, as_of, unclassified, countries, today)]
+                     for ticker, name, _, source, as_of, unclassified, countries in weights],
+                    numeric=(3,),
+                ),
+                title="Country weights",
+                description="Fund weights come from factsheets in data/reference/exposures.csv; refresh them once a "
+                            "year, with the full country list, to keep Unclassified small.",
             ),
         ],
         gap="lg",

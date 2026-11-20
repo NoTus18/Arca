@@ -53,6 +53,7 @@ def render(accounts, asset_types, tickers):
         realised = portfolio.realised_gains(connection, account_ids, asset_types, tickers)
         dividends = portfolio.dividends(connection, account_ids, by="year", asset_types=asset_types, tickers=tickers)
         fees = [] if holdings_view else portfolio.fees(connection, account_ids, by="type")
+        open_fees, sold_fees = data.trading_fees_split(connection, account_ids, asset_types, tickers)
         by_type = portfolio.allocation(connection, account_ids, by="asset_type", asset_types=asset_types,
                                        tickers=tickers, include_cash=not holdings_view)
         names = data.instruments(connection)
@@ -63,16 +64,17 @@ def render(accounts, asset_types, tickers):
     latest = history[-1]
     value, invested, gain = latest["value_eur"], latest["invested_eur"], latest["unrealised_pnl_eur"]
 
-    # Where the gain came from. Trade fees are already in the average cost, so only other fees
-    # (currency conversions) get their own row; what is left is mostly currency moves on cash.
+    # Where the gain came from. Trade fees sit inside the average cost, so they are added back to the
+    # price and sale gains and shown as one line; what is left is mostly currency moves on cash.
     unrealised = sum((h["unrealised_pnl_eur"] for h in snapshot), Decimal(0))
     realised_total = sum((r["realised_eur"] for r in realised), Decimal(0))
     dividends_net = sum((d["net_eur"] for d in dividends), Decimal(0))
     other_fees = sum((f["fees_eur"] for f in fees if f["group"] not in ("buy", "sell")), Decimal(0))
     parts = [
-        ("Price gains on holdings", unrealised, "Value now against average cost"),
-        ("Realised on sales", realised_total, None),
+        ("Price gains on holdings", unrealised + open_fees, "Value now against what you paid, before fees"),
+        ("Realised on sales", realised_total + sold_fees, "Before fees"),
         ("Dividends", dividends_net, "After withholding tax"),
+        ("Trading fees", -(open_fees + sold_fees), "On buys and sells"),
     ]
     if not holdings_view:
         parts.append(("Conversion and other fees", other_fees, None))

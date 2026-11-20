@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -41,60 +42,74 @@ def fetch_exposure(ticker, asset_type, folder=cache_folder):
         json.dump(exposure, f, indent=2)
 
 
+UNCLASSIFIED = "Unclassified"
+
+
 def sector_key(sector):
     """'Real Estate' -> 'realestate', 'Financial Services' -> 'financial_services', as in ETF weights."""
     key = sector.lower().replace(" ", "_")
     return "realestate" if key == "real_estate" else key
 
 
+def clean_name(kind, name):
+    """Sectors as ETF keys; 'Other' is weight the source doesn't list, so it's Unclassified, not a country."""
+    if name.strip().lower() in ("other", UNCLASSIFIED.lower()):
+        return UNCLASSIFIED
+    return sector_key(name) if kind == "sector" else name
+
+
 def parse_exposure(path, instrument_id, asset_type):
-    """Turn a cached JSON into (instrument_id, kind, name, weight, source) rows."""
+    """Turn a cached JSON into (instrument_id, kind, name, weight, source, as_of) rows."""
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     if asset_type == "etf":
         return [
-            (instrument_id, "sector", name, Decimal(str(weight)), "yfinance")
+            (instrument_id, "sector", clean_name("sector", name), Decimal(str(weight)), "yfinance", None)
             for name, weight in (data.get("sectors") or {}).items()
         ]
 
     rows = []
     if data.get("sector"):
-        rows.append((instrument_id, "sector", sector_key(data["sector"]), Decimal(1), "yfinance"))
+        rows.append((instrument_id, "sector", clean_name("sector", data["sector"]), Decimal(1), "yfinance", None))
     if data.get("country"):
-        rows.append((instrument_id, "country", data["country"], Decimal(1), "yfinance"))
+        rows.append((instrument_id, "country", clean_name("country", data["country"]), Decimal(1), "yfinance", None))
     return rows
 
 
 def load_overrides(path):
-    """(isin, kind, name, weight_pct) rows from the hand-written file, or none if it doesn't exist."""
+    """(isin, kind, name, weight_pct, as_of) rows from the hand-written file, or none if it doesn't exist."""
     if not path.exists():
         return []
     with open(path, newline="", encoding="utf-8") as f:
-        return [(r["isin"], r["kind"], r["name"], Decimal(r["weight_pct"])) for r in csv.DictReader(f)]
+        return [
+            (r["isin"], r["kind"], r["name"], Decimal(r["weight_pct"]),
+             date.fromisoformat(r["as_of"]) if r.get("as_of") else None)
+            for r in csv.DictReader(f)
+        ]
 
 
 def apply_overrides(rows, overrides, isin_to_id):
     """Each (instrument, kind) in the overrides replaces all of yfinance's rows for it."""
     replaced = set()
     added = []
-    for isin, kind, name, weight in overrides:
+    for isin, kind, name, weight, as_of in overrides:
         if isin not in isin_to_id:
             raise ValueError(f"ISIN {isin} in the exposures file but not in the database.")
         replaced.add((isin_to_id[isin], kind))
-        name = sector_key(name) if kind == "sector" else name
-        added.append((isin_to_id[isin], kind, name, weight, "reference"))
+        added.append((isin_to_id[isin], kind, clean_name(kind, name), weight, "reference", as_of))
     return [row for row in rows if (row[0], row[1]) not in replaced] + added
 
 
 def normalise(rows):
     """Scale each (instrument, kind) so its weights add up to 1."""
     totals = defaultdict(Decimal)
-    for instrument_id, kind, _, weight, _ in rows:
+    for instrument_id, kind, _, weight, _, _ in rows:
         totals[(instrument_id, kind)] += weight
     return [
-        (instrument_id, kind, name, (weight / totals[(instrument_id, kind)]).quantize(Decimal("0.000001")), source)
-        for instrument_id, kind, name, weight, source in rows
+        (instrument_id, kind, name, (weight / totals[(instrument_id, kind)]).quantize(Decimal("0.000001")),
+         source, as_of)
+        for instrument_id, kind, name, weight, source, as_of in rows
     ]
 
 
@@ -104,7 +119,10 @@ def save_exposures_to_db(connection, rows):
     try:
         connection.execute("DELETE FROM exposures")
         if rows:
-            connection.executemany("INSERT INTO exposures (instrument_id, kind, name, weight, source) VALUES (?, ?, ?, ?, ?)", rows)
+            connection.executemany(
+                "INSERT INTO exposures (instrument_id, kind, name, weight, source, as_of) VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
         connection.commit()
     except Exception:
         connection.rollback()
@@ -138,16 +156,16 @@ def run(connection, fetch=True):
 
 
 def print_summary(connection):
-    for ticker, kind, count, source in connection.execute(
+    for ticker, kind, count, source, as_of in connection.execute(
         """
-        SELECT i.price_ticker, e.kind, COUNT(*), STRING_AGG(DISTINCT e.source, ', ')
+        SELECT i.price_ticker, e.kind, COUNT(*), STRING_AGG(DISTINCT e.source, ', '), MAX(e.as_of)
         FROM exposures e
         JOIN instruments i ON i.instrument_id = e.instrument_id
         GROUP BY i.price_ticker, e.kind
         ORDER BY i.price_ticker, e.kind
         """
     ).fetchall():
-        print(f"  {ticker:10} {kind:8} {count:3} rows from {source}")
+        print(f"  {ticker:10} {kind:8} {count:3} rows from {source}{f', as of {as_of}' if as_of else ''}")
 
 
 if __name__ == "__main__":

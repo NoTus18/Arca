@@ -14,6 +14,7 @@
     --arca-series-6: #008300;
     --arca-series-7: #6250d6;
     --arca-series-8: #e34948;
+    --arca-unclassified: #a3abb8;
 
     /* Gain/loss marks, and darker steps for text so it stays readable. */
     --arca-good: #0ca30c;
@@ -36,6 +37,7 @@
     --arca-series-6: #0ca30c;
     --arca-series-7: #9085e9;
     --arca-series-8: #e66767;
+    --arca-unclassified: #5e6877;
 
     --arca-good-text: #5ccb76;
     --arca-bad-text: #f07a78;

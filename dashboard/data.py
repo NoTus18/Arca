@@ -136,6 +136,94 @@ def dividends_between(connection, account_ids, asset_types, tickers, after, unti
                                                  tickers=tickers) if after < r["group"] <= until), Decimal(0))
 
 
+FEE_GROUPS = {
+    "month": "strftime(t.event_date, '%Y-%m')",
+    "year": "year(t.event_date)",
+    "account": "t.account_id",
+    "type": "t.type",
+}
+
+
+def fees_by_type(connection, account_ids, by):
+    """portfolio.fees() split by the transaction type the fee was paid on, as (group, type, EUR) rows."""
+    return connection.execute(
+        f"""
+        SELECT {FEE_GROUPS[by]} AS grp, t.type,
+               SUM(CAST(tl.amount / CASE WHEN tl.currency = 'EUR' THEN 1 ELSE f.rate END AS DECIMAL(18, 6)))
+        FROM transaction_legs tl
+        JOIN transactions t ON t.transaction_id = tl.transaction_id
+        LEFT JOIN daily_fx f ON f.quote_currency = tl.currency AND f.date = t.event_date
+        WHERE tl.role = 'fee'
+          AND list_contains($account_ids, t.account_id)
+        GROUP BY grp, t.type
+        ORDER BY grp, t.type
+        """,
+        {"account_ids": account_ids},
+    ).fetchall()
+
+
+def trading_fees_split(connection, account_ids, asset_types, tickers):
+    """Buy and sell fees in EUR (positive), as (still in open positions' cost, gone through sales).
+
+    The trades view counts fees in cash_eur, so they sit inside the average cost. This repeats
+    portfolio.average_cost_positions' walk on the fees alone to say which side of the gain they are in.
+    """
+    rows = connection.execute(
+        """
+        SELECT t.account_id, i.price_ticker, t.quantity, COALESCE(-SUM(
+               CAST(tl.amount / CASE WHEN tl.currency = 'EUR' THEN 1 ELSE f.rate END AS DECIMAL(18, 6))), 0)
+        FROM trades t
+        JOIN instruments i ON i.instrument_id = t.instrument_id
+        LEFT JOIN transaction_legs tl ON tl.transaction_id = t.transaction_id AND tl.role = 'fee'
+        LEFT JOIN daily_fx f ON f.quote_currency = tl.currency AND f.date = t.event_date
+        WHERE list_contains($account_ids, t.account_id)
+          AND ($tickers IS NULL OR list_contains($tickers, i.price_ticker))
+          AND ($asset_types IS NULL OR list_contains($asset_types, i.asset_type))
+        GROUP BY t.account_id, i.price_ticker, t.quantity, t.event_date, t.transaction_id
+        ORDER BY t.event_date, t.transaction_id
+        """,
+        {"account_ids": account_ids, "asset_types": asset_types, "tickers": tickers},
+    ).fetchall()
+
+    positions, sold_through = {}, Decimal(0)
+    for account_id, ticker, quantity, fee in rows:
+        position = positions.setdefault((account_id, ticker), {"qty": Decimal(0), "fees": Decimal(0)})
+        if quantity > 0:
+            position["qty"] += quantity
+            position["fees"] += fee
+        else:
+            moved = position["fees"] * -quantity / position["qty"]
+            position["fees"] -= moved
+            position["qty"] += quantity
+            sold_through += moved + fee
+    return sum((p["fees"] for p in positions.values()), Decimal(0)), sold_through
+
+
+def tickers_with_exposures(connection, kind):
+    """Tickers that have country or sector weights."""
+    return {r[0] for r in connection.execute(
+        "SELECT DISTINCT i.price_ticker FROM exposures e JOIN instruments i USING (instrument_id) WHERE e.kind = ?",
+        [kind]).fetchall()}
+
+
+def exposure_freshness(connection):
+    """Per held instrument: where its country weights come from, their date and the Unclassified share."""
+    return connection.execute(
+        """
+        SELECT i.price_ticker, i.name, i.asset_type,
+               STRING_AGG(DISTINCT e.source, ', ') AS source,
+               MAX(e.as_of) AS as_of,
+               COALESCE(SUM(e.weight) FILTER (WHERE e.name = 'Unclassified'), 0) AS unclassified,
+               COUNT(e.name) AS countries
+        FROM instruments i
+        LEFT JOIN exposures e ON e.instrument_id = i.instrument_id AND e.kind = 'country'
+        WHERE i.instrument_id IN (SELECT instrument_id FROM holdings GROUP BY instrument_id HAVING SUM(quantity) > 0)
+        GROUP BY i.instrument_id, i.price_ticker, i.name, i.asset_type
+        ORDER BY unclassified DESC, i.name
+        """
+    ).fetchall()
+
+
 def import_runs(connection):
     return connection.execute(
         "SELECT broker, transaction_count, imported_at FROM import_runs ORDER BY broker"

@@ -13,6 +13,9 @@ dash.register_page(__name__, path="/income", name="Dividends & fees", order=4)
 
 DIVIDEND_GROUPS = {"month": "Month", "year": "Year", "ticker": "Holding"}
 FEE_GROUPS = {"year": "Year", "month": "Month", "type": "Type", "account": "Account"}
+# Fee colours keep clear of blue and orange, which mean received and withheld in the dividends chart.
+FEE_TYPES = {"buy": ("Buy", ui.SERIES[2]), "sell": ("Sell", ui.SERIES[4]),
+             "conversion": ("Currency conversion", ui.SERIES[6])}
 
 layout = html.Div(
     [
@@ -121,24 +124,32 @@ def render_fees(accounts, asset_types, tickers, by):
         return ui.no_accounts()
 
     with data.connect() as connection:
-        rows = portfolio.fees(connection, account_ids, by=by)
+        rows = data.fees_by_type(connection, account_ids, by)
         names = data.accounts(connection)
 
     if not rows:
         return ui.empty("No fees recorded", "Lightyear deposit fees aren't in its exports.")
 
-    label = {"account": lambda g: names.get(g, str(g)), "type": lambda g: str(g).title()}.get(by, str)
-    total = -sum((r["fees_eur"] for r in rows), Decimal(0))
-    note = None
+    kind = lambda t: FEE_TYPES.get(t, (str(t).title(), ui.SERIES[3]))
+    label = {"account": lambda g: names.get(g, str(g)), "type": lambda g: kind(g)[0]}.get(by, str)
+    order = list(FEE_TYPES)
+    types = sorted({t for _, t, _ in rows}, key=lambda t: order.index(t) if t in order else len(order))
+    # One row per group with every type, so the stacks line up.
+    bars = {}
+    for group, fee_type, amount in rows:
+        bars.setdefault(group, {"label": label(group), **dict.fromkeys(types, 0)})[fee_type] = data.num(-amount)
+    total = -sum((amount for _, _, amount in rows), Decimal(0))
+    note = "Paid on trades and currency conversions. Tax withheld on dividends is in the chart above."
     if data.is_holdings_view(asset_types, tickers):
-        note = dmc.Text("Fees cover the whole accounts: conversion fees belong to no holding.", size="xs", c="dimmed")
+        note += " Fees cover the whole accounts: conversion fees belong to no holding."
 
     return dmc.Stack(
         [
-            dmc.Group([ui.stat("Paid in fees", ui.eur(total)), note], justify="space-between", align="flex-end"),
-            bar_chart([{"label": label(r["group"]), "fees": data.num(-r["fees_eur"])} for r in rows],
-                      [{"name": "fees", "label": "Fees", "color": ui.SERIES[1]}],
-                      horizontal=by in ("type", "account")),
+            dmc.Group([ui.stat("Paid in fees", ui.eur(total)), dmc.Text(note, size="xs", c="dimmed", maw=420)],
+                      justify="space-between", align="flex-end"),
+            ui.legend([kind(t) for t in types]),
+            bar_chart(list(bars.values()), [{"name": t, "label": kind(t)[0], "color": kind(t)[1]} for t in types],
+                      horizontal=by in ("type", "account"), type="stacked"),
         ],
         gap="md",
     )

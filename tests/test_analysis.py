@@ -150,6 +150,57 @@ def test_allocation_groups_todays_value_and_adds_up_to_100(connection):
         allocation(connection, [1], by="nonsense")
 
 
+def test_allocation_spreads_holdings_over_country_region_and_sector(connection):
+    add_etf_and_stock(connection)  # ETF1 worth 20, STK1 worth 30, plus 150 EUR cash
+    connection.execute(
+        """
+        INSERT INTO exposures (instrument_id, kind, name, weight, source) VALUES
+            (1, 'country', 'United States', 0.7, 'reference'), (1, 'country', 'Japan', 0.3, 'reference'),
+            (1, 'sector', 'technology', 0.5, 'yfinance'), (1, 'sector', 'energy', 0.5, 'yfinance'),
+            (2, 'country', 'United States', 1, 'yfinance')
+        """
+    )
+
+    def by(group, **filters):
+        return [(row["group"], row["value_eur"], row["weight_pct"]) for row in allocation(connection, [1, 2], by=group, **filters)]
+
+    # US: 0.7 * 20 + 30 = 44, Japan 0.3 * 20 = 6. Cash is left out even with include_cash.
+    assert by("country") == [("United States", 44, 88), ("Japan", 6, 12)]
+    assert by("region") == [("North America", 44, 88), ("Asia-Pacific", 6, 12)]
+    # STK1 has no sector rows, so it's left out: only ETF1's 20 is split.
+    assert by("sector") == [("energy", 10, 50), ("technology", 10, 50)]
+    assert by("country", tickers=["ETF1"]) == [("United States", 14, 70), ("Japan", 6, 30)]
+
+    connection.execute("UPDATE exposures SET name = 'Atlantis' WHERE name = 'Japan'")
+    with pytest.raises(ValueError, match="Atlantis"):
+        allocation(connection, [1], by="region")
+
+
+def test_regions_are_geographic_and_unclassified_goes_last(connection):
+    add_etf_and_stock(connection)  # ETF1 worth 20, STK1 worth 30
+    connection.execute(
+        """
+        INSERT INTO exposures (instrument_id, kind, name, weight, source) VALUES
+            (1, 'country', 'United States', 0.2, 'reference'), (1, 'country', 'Taiwan', 0.1, 'reference'),
+            (1, 'country', 'Mexico', 0.1, 'reference'), (1, 'country', 'Unclassified', 0.6, 'reference'),
+            (2, 'country', 'South Korea', 1, 'yfinance')
+        """
+    )
+
+    def by(group):
+        return [(row["group"], row["value_eur"]) for row in allocation(connection, [1], by=group)]
+
+    # Unclassified (12) is bigger than three countries but is a gap in the data, so it stays last.
+    assert by("country") == [("South Korea", 30), ("United States", 4), ("Mexico", 2), ("Taiwan", 2), ("Unclassified", 12)]
+    # Taiwan and Korea are in Asia-Pacific whatever their market type; Mexico is Latin America.
+    assert by("region") == [("Asia-Pacific", 32), ("North America", 4), ("Latin America", 2), ("Unclassified", 12)]
+    assert by("market") == [("Emerging", 34), ("Developed", 4), ("Unclassified", 12)]
+
+    asia = allocation(connection, [1], by="region")[0]
+    assert asia["by_ticker"] == [("STK1", 30), ("ETF1", 2)]
+    assert sum(value for _, value in asia["by_ticker"]) == asia["value_eur"]
+
+
 def test_performance_account_view_counts_deposits_as_invested(connection):
     rows = performance(connection, [1, 2])
 

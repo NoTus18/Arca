@@ -1,9 +1,9 @@
-isin,kind,name,weight_pct
-IE00B4L5Y983,country,United States,70
-IE00B4L5Y983,country,Japan,6
-IE00B4L5Y983,country,United Kingdom,4
-IE00B4L5Y983,country,Other,20
-IE00B4L5Y983,sector,Technology,25
-IE00B4L5Y983,sector,Financial Services,15
-IE00B4L5Y983,sector,Other,60
-US7561091049,country,United States,100
+isin,kind,name,weight_pct,as_of
+IE00B4L5Y983,country,United States,70,2026-10-31
+IE00B4L5Y983,country,Japan,6,2026-10-31
+IE00B4L5Y983,country,United Kingdom,4,2026-10-31
+IE00B4L5Y983,country,Other,20,2026-10-31
+IE00B4L5Y983,sector,Technology,25,2026-10-31
+IE00B4L5Y983,sector,Financial Services,15,2026-10-31
+IE00B4L5Y983,sector,Other,60,2026-10-31
+US7561091049,country,United States,100,

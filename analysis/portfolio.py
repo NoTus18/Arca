@@ -1,4 +1,8 @@
+import csv
+import functools
+from collections import defaultdict
 from decimal import Decimal
+from pathlib import Path
 
 
 def check_known(connection, column, given):
@@ -170,7 +174,24 @@ def realised_gains(connection, account_ids, asset_types=None, tickers=None):
     ]
 
 
+COUNTRIES_FILE = Path(__file__).parent.parent / "reference" / "countries.csv"
+UNCLASSIFIED = "Unclassified"
+
+
+@functools.cache
+def load_countries(path=COUNTRIES_FILE):
+    """Country -> (region, market_type). Regions are geographic; market type is MSCI's."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return {r["country"]: (r["region"], r["market_type"]) for r in csv.DictReader(f)}
+
+
+# Groups that spread each holding over its weights in exposures; region and market roll countries up.
+EXPOSURE_KINDS = {"country": "country", "region": "country", "market": "country", "sector": "sector"}
+ROLL_UPS = {"region": 0, "market": 1}
+
+
 def allocation(connection, account_ids, by="asset_type", asset_types=None, tickers=None, include_cash=True):
+    """Latest value per group. Country, region and sector leave out cash and holdings without weights."""
     if not account_ids:
         raise ValueError("account_ids cannot be empty")
     check_known(connection, "price_ticker", tickers)
@@ -182,33 +203,70 @@ def allocation(connection, account_ids, by="asset_type", asset_types=None, ticke
         "account": "v.account_id",
         "ticker": "COALESCE(i.price_ticker, 'cash')",
     }
-    if by not in GROUPS:
-        raise ValueError(f"by must be one of {sorted(GROUPS)}")
+    if by not in GROUPS and by not in EXPOSURE_KINDS:
+        raise ValueError(f"by must be one of {sorted([*GROUPS, *EXPOSURE_KINDS])}")
 
-    rows = connection.execute(
-        f"""
-        SELECT {GROUPS[by]} AS grp, SUM(v.value_eur) AS value_eur
-        {SELECTION}
-        AND v.date = (SELECT MAX(date) FROM daily_valuation)
-        GROUP BY grp
-        ORDER BY value_eur DESC
-        """,
-        {
-            "account_ids": account_ids,
-            "tickers": tickers,
-            "asset_types": asset_types,
-            "include_cash": include_cash,
-        }
-    ).fetchall()
+    params = {
+        "account_ids": account_ids,
+        "tickers": tickers,
+        "asset_types": asset_types,
+        "include_cash": include_cash,
+    }
+    if by in GROUPS:
+        rows = connection.execute(
+            f"""
+            SELECT {GROUPS[by]} AS grp, SUM(v.value_eur) AS value_eur
+            {SELECTION}
+            AND v.date = (SELECT MAX(date) FROM daily_valuation)
+            GROUP BY grp
+            ORDER BY value_eur DESC
+            """,
+            params,
+        ).fetchall()
+        rows = [(grp, value, None) for grp, value in rows]
+    else:
+        parts = connection.execute(
+            f"""
+            SELECT e.name, s.price_ticker, SUM(s.value_eur * e.weight)
+            FROM (
+                SELECT v.instrument_id, i.price_ticker, v.value_eur
+                {SELECTION}
+                AND v.date = (SELECT MAX(date) FROM daily_valuation)
+            ) s
+            JOIN exposures e ON e.instrument_id = s.instrument_id AND e.kind = $kind
+            GROUP BY e.name, s.price_ticker
+            """,
+            {**params, "include_cash": False, "kind": EXPOSURE_KINDS[by]},
+        ).fetchall()
 
-    total = sum(value_eur for grp, value_eur in rows)
+        if by in ROLL_UPS:
+            countries = load_countries()
+            unknown = {name for name, _, _ in parts} - countries.keys() - {UNCLASSIFIED}
+            if unknown:
+                raise ValueError(f"Countries missing from reference/countries.csv: {sorted(unknown)}")
+            column = ROLL_UPS[by]
+            parts = [(name if name == UNCLASSIFIED else countries[name][column], ticker, value)
+                     for name, ticker, value in parts]
+
+        groups = defaultdict(lambda: defaultdict(Decimal))
+        for name, ticker, value in parts:
+            groups[name][ticker] += value
+        rows = [(name, sum(by_ticker.values()), sorted(by_ticker.items(), key=lambda p: p[1], reverse=True))
+                for name, by_ticker in groups.items()]
+        # Unclassified is a gap in the data, not a group, so it goes last whatever its size.
+        rows.sort(key=lambda row: (row[0] == UNCLASSIFIED, -row[1], row[0]))
+
+    total = sum(value_eur for _, value_eur, _ in rows)
     result = []
-    for grp, value in rows:
-        result.append({
+    for grp, value, by_ticker in rows:
+        row = {
             "group": grp,
             "value_eur": value,
-            "weight_pct": (value / total) * 100,
-        })
+            "weight_pct": (value / total) * 100 if total else Decimal(0),
+        }
+        if by_ticker is not None:
+            row["by_ticker"] = by_ticker
+        result.append(row)
     return result
 
 def performance(connection, account_ids, asset_types=None, tickers=None):

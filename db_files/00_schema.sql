@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS exposures (
   name VARCHAR(255) NOT NULL,
   weight DECIMAL(9, 6) NOT NULL,
   source VARCHAR(255) NOT NULL,
+  as_of DATE,
 
   PRIMARY KEY (instrument_id, kind, name)
 );
+
+-- Databases made before as_of existed.
+ALTER TABLE exposures ADD COLUMN IF NOT EXISTS as_of DATE;
