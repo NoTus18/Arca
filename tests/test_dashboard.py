@@ -123,3 +123,21 @@ def test_overview_bridge_shows_trading_fees_on_their_own_line():
     for text in ("+€17.09", "−€0.85", "Trading fees", "−€2.00"):
         assert text in page
     assert "Currency moves and other" not in page
+
+
+def test_last_12_months_dividends_leave_out_older_ones():
+    # March 2026 (net 1.70 USD / 1.17 = 1.45) is inside the window; a 3 USD dividend from 2024 is not.
+    with duckdb.connect(data.DATABASE) as connection:
+        connection.execute("INSERT INTO fx_rates VALUES ('2024-01-10', 'EUR', 'USD', 1.10)")
+        connection.execute("INSERT INTO transactions (transaction_id, account_id, instrument_id, type, event_date) "
+                           "VALUES (5, 2, 5, 'dividend', '2024-01-10')")
+        connection.execute("INSERT INTO transaction_legs (transaction_id, leg_number, role, amount, currency, source_file, "
+                           "source_id) VALUES (5, 1, 'income', 3, 'USD', 't.csv', 'old')")
+    page = rendered(income.render_dividends(["2"], None, None, "month"))
+    assert "Last 12 months" in page and "€1.45" in page  # 1.45 in the window
+    assert "€4.18" in page  # all-time received: 1.45 + 3 / 1.10
+
+
+def test_holdings_show_each_holdings_share_of_the_gain():
+    page = rendered(holdings.render(["2"], None, None, "value"))
+    assert "Share of gain" in page and "+100.0%" in page

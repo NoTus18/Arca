@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import dash
@@ -76,6 +76,9 @@ def render_dividends(accounts, asset_types, tickers, by):
     with data.connect() as connection:
         rows = portfolio.dividends(connection, account_ids, by=by, asset_types=asset_types, tickers=tickers)
         names = data.instruments(connection)
+        today = date.today()
+        last_year = data.dividends_between(connection, account_ids, asset_types, tickers,
+                                           today - timedelta(days=365), today)
 
     if not rows:
         return ui.empty("No dividends in this selection")
@@ -103,11 +106,12 @@ def render_dividends(accounts, asset_types, tickers, by):
     return dmc.Stack(
         [
             dmc.SimpleGrid(
-                [ui.stat("Received", ui.eur(net)),
+                [ui.stat("Last 12 months", ui.eur(last_year), dmc.Text("received after tax", size="xs", c="dimmed")),
+                 ui.stat("Received", ui.eur(net)),
                  ui.stat("Before tax", ui.eur(gross)),
                  ui.stat("Withheld tax", ui.eur(-tax)),
                  ui.stat("Withholding rate", ui.pct(-tax / gross * 100 if gross else None))],
-                cols={"base": 2, "md": 4}, spacing="lg",
+                cols={"base": 2, "md": 5}, spacing="lg",
             ),
             ui.legend([("Received", ui.SERIES[0]), ("Withheld tax", ui.SERIES[1])]),
             chart,

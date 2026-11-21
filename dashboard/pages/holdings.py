@@ -72,8 +72,10 @@ def render(accounts, asset_types, tickers, sort):
     if not snapshot:
         holdings_table = ui.empty("No open positions in this selection")
     else:
+        # A share of a loss reads backwards, so shares only show when the selection is up overall.
+        share = lambda h: h["unrealised_pnl_eur"] / total_gain * 100 if total_gain > 0 else None
         holdings_table = ui.table(
-            ["Holding", "Type", "Shares", "Avg cost", "Cost", "Value", "Gain", "Gain %", "Weight"],
+            ["Holding", "Type", "Shares", "Avg cost", "Cost", "Value", "Gain", "Gain %", "Share of gain", "Weight"],
             [
                 [
                     dmc.Stack([dmc.Text(names[h["ticker"]][0], size="sm", fw=500),
@@ -86,16 +88,18 @@ def render(accounts, asset_types, tickers, sort):
                     ui.eur(h["value_eur"]),
                     ui.signed_text(ui.eur(h["unrealised_pnl_eur"], signed=True), h["unrealised_pnl_eur"], size="sm"),
                     ui.signed_text(ui.pct(h["unrealised_pnl_percent"], signed=True), h["unrealised_pnl_eur"], size="sm"),
+                    ui.signed_text(ui.pct(share(h), signed=True), h["unrealised_pnl_eur"], size="sm"),
                     ui.weight_bar(h["weight_pct"]),
                 ]
                 for h in snapshot
             ],
-            numeric=(2, 3, 4, 5, 6, 7),
-            min_width=1000,
+            numeric=(2, 3, 4, 5, 6, 7, 8),
+            min_width=1100,
             foot=["Total", "", "", "", ui.eur(total_cost), ui.eur(total_value),
                   ui.signed_text(ui.eur(total_gain, signed=True), total_gain, size="sm"),
                   ui.signed_text(ui.pct(total_gain / total_cost * 100 if total_cost else None, signed=True),
-                                 total_gain, size="sm"), ""],
+                                 total_gain, size="sm"),
+                  ui.pct(100) if total_gain > 0 else "", ""],
         )
 
     if realised:
@@ -113,7 +117,9 @@ def render(accounts, asset_types, tickers, sort):
     return dmc.Stack(
         [
             ui.panel(summary),
-            ui.panel(holdings_table, title="Open positions", description="Weight is the share of the selected holdings' value."),
+            ui.panel(holdings_table, title="Open positions",
+                     description="Weight is the share of the selected holdings' value. Share of gain is each "
+                                 "holding's part of the total unrealised gain; losers show a negative share."),
             ui.panel(realised_table, title="Realised from sales",
                      description="Sale proceeds minus the average cost of the shares sold, fully sold holdings included."),
         ],
