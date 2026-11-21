@@ -413,3 +413,94 @@ def fees(connection, account_ids, by="year"):
     ).fetchall()
 
     return [{"group": grp, "fees_eur": amount} for grp, amount in rows]
+
+def time_weighted(history):
+    growth = Decimal(1)
+    prev_value = Decimal(0)
+    prev_invested = Decimal(0)
+    result = []
+    for row in history:
+        flow = row["invested_eur"] - prev_invested
+        base = prev_value + flow
+        if base > 0:
+            growth *= (row["value_eur"]) / base
+        result.append((
+            row["date"],
+            growth))
+        prev_value = row["value_eur"]
+        prev_invested = row["invested_eur"]
+    return result
+
+def xirr(cashflows, period=365):
+    """Rate per `period` days that makes the cash flows add up to zero (money in negative), or None."""
+    def npv(rate):
+        first = cashflows[0][0]
+        return sum(amount / (1 + rate) ** (Decimal((day - first).days) / period) for day, amount in cashflows)
+
+    low, high = Decimal('-0.99'), Decimal(10)
+    if (npv(low) > 0) == (npv(high) > 0):
+        return None
+
+    for _ in range(100):
+        mid = (low + high) / 2
+        if (npv(mid) > 0) == (npv(low) > 0):
+            low = mid
+        else:
+            high = mid
+
+    return mid
+
+
+def returns(history, start=None):
+    """Time- and money-weighted return in % from start (None: all). Per year only over a year or more."""
+    if not history:
+        return None
+
+    if start is None:
+        index = 0
+    else:
+        index = next((i for i, row in enumerate(history) if row["date"] >= start), len(history) - 1)
+
+    if index > 0:
+        base = history[index - 1]
+    else:
+        base = None
+
+    shown = history[index:]
+    last = history[-1]
+
+    if base is None:
+        first_date = history[0]["date"]
+    else:
+        first_date = base["date"]
+    days = (last["date"] - first_date).days
+
+    growth = time_weighted(history)
+    growth_end = growth[-1][1]
+    growth_base = growth[index - 1][1] if index > 0 else Decimal(1)
+    twr = (growth_end / growth_base) - 1
+    cashflows = []
+    if base is not None:
+        cashflows.append((base["date"], -base["value_eur"]))
+
+    prev = base["invested_eur"] if base is not None else Decimal(0)
+    for row in shown:
+        flow = row["invested_eur"] - prev
+        if flow != 0:
+            cashflows.append((row["date"], -flow))
+        prev = row["invested_eur"]
+
+    cashflows.append((last["date"], last["value_eur"]))
+
+    annualised = days >= 365
+    # Short ranges solve for the return over the range itself: per year, a few days blow up past any bound.
+    rate = xirr(cashflows, period=365 if annualised else days) if days > 0 else None
+    if annualised:
+        twr = (1 + twr) ** (Decimal(365) / days) - 1
+
+    return {
+        "time_weighted": twr * 100,
+        "money_weighted": rate * 100 if rate is not None else None,
+        "days": days,
+        "annualised": annualised,
+    }

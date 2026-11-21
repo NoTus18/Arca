@@ -141,3 +141,10 @@ def test_last_12_months_dividends_leave_out_older_ones():
 def test_holdings_show_each_holdings_share_of_the_gain():
     page = rendered(holdings.render(["2"], None, None, "value"))
     assert "Share of gain" in page and "+100.0%" in page
+
+
+def test_performance_shows_time_and_money_weighted_returns_for_every_range():
+    for choice in performance.RANGES:
+        page = rendered(performance.render(["2"], None, None, choice))
+        assert "Time-weighted return" in page and "Money-weighted return" in page
+        assert "Gain as a percentage" not in page

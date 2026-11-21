@@ -104,13 +104,38 @@ def render(accounts, asset_types, tickers, choice):
         ui.stat("Value at end", ui.eur(last["value_eur"]), note(end if index == 0 else all_time)),
         money_in_card(money_in, breakdown, holdings_view, dividends_in_gain),
     ]
-    summary = dmc.SimpleGrid(cards, cols={"base": 2, "md": len(cards)}, spacing="lg")
+    result = portfolio.returns(history, start)
+    period = "per year" if result["annualised"] else f"over {result['days']} days"
+    twr, mwr = result["time_weighted"], result["money_weighted"]
+    return_cards = [
+        ui.stat("Time-weighted return", ui.signed_text(ui.pct(twr, signed=True), twr, className="stat-value"),
+                note(f"{period}: how the investments did, whatever you deposited")),
+        ui.stat("Money-weighted return",
+                ui.signed_text(ui.pct(mwr, signed=True), mwr or 0, className="stat-value"),
+                note(f"{period}: what your money earned, given when it went in")),
+    ]
+    gap = mwr - twr if mwr is not None else Decimal(0)
+    timing = None
+    if abs(gap) >= Decimal("0.5"):  # smaller gaps are noise from daily closes
+        timing = note(f"Your timing {'added' if gap > 0 else 'cost'} {abs(gap):.1f} points: money tended to go in "
+                      f"before {'stronger' if gap > 0 else 'weaker'} days.")
+    summary = dmc.Stack(
+        [dmc.SimpleGrid(cards, cols={"base": 2, "md": len(cards)}, spacing="lg"),
+         dmc.Divider(),
+         dmc.SimpleGrid(return_cards, cols={"base": 1, "sm": 2}, spacing="lg"),
+         timing],
+        gap="md",
+    )
 
+    # Time-weighted growth chains, so the range starts at 0% from the close before it.
+    growth = portfolio.time_weighted(history)
+    growth_base = growth[index - 1][1] if index > 0 else Decimal(1)
     rows = [{"date": r["date"].isoformat(),
              "value": data.num(r["value_eur"]),
              "invested": data.num(r["invested_eur"]),
              "gain": data.num(r["unrealised_pnl_eur"]),
-             "gain_pct": data.num(r["unrealised_pnl_percent"])} for r in shown]
+             "twr": data.num((g / growth_base - 1) * 100)}
+            for r, (_, g) in zip(shown, growth[index:])]
 
     value_chart = ui.time_chart(
         rows,
@@ -122,8 +147,8 @@ def render(accounts, asset_types, tickers, choice):
         rows, [{"name": "gain", "label": "Gain", "color": ui.SERIES[0]}],
         type="split", splitColors=[ui.GOOD, ui.BAD], h=220,
     )
-    gain_pct_chart = ui.time_chart(
-        rows, [{"name": "gain_pct", "label": "Gain %", "color": ui.SERIES[0]}],
+    twr_chart = ui.time_chart(
+        rows, [{"name": "twr", "label": "Time-weighted return", "color": ui.SERIES[0]}],
         kind=dmc.LineChart, h=220,
         valueFormatter={"function": "pct"},
         yAxisProps={"tickFormatter": {"function": "pct"}, "width": 56},
@@ -149,7 +174,9 @@ def render(accounts, asset_types, tickers, choice):
                      "Net invested is buys minus sales and dividends of the selected holdings."),
             dmc.SimpleGrid(
                 [ui.panel(gain_chart, title="Gain in euros", description="Value minus money in."),
-                 ui.panel(gain_pct_chart, title="Gain as a percentage", description="Gain over money in.")],
+                 ui.panel(twr_chart, title="Time-weighted return",
+                          description="Growth of the investments with deposits taken out; the line a benchmark "
+                                      "would sit next to.")],
                 cols={"base": 1, "md": 2}, spacing="lg",
             ),
             ui.panel(dmc.Stack([ui.legend([(s["name"], s["color"]) for s in accounts_series]), accounts_chart]),
