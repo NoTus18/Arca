@@ -94,5 +94,12 @@ CREATE TABLE IF NOT EXISTS exposures (
   PRIMARY KEY (instrument_id, kind, name)
 );
 
+CREATE TABLE IF NOT EXISTS companies (
+  symbol VARCHAR(255) NOT NULL,
+  company VARCHAR(255) NOT NULL,
+
+  PRIMARY KEY (symbol)
+);
+
 -- Databases made before as_of existed.
 ALTER TABLE exposures ADD COLUMN IF NOT EXISTS as_of DATE;

@@ -24,11 +24,17 @@ from init_db import DATABASE_FILE
 project_root = Path(__file__).parent.parent
 cache_folder = project_root / "data" / "raw" / "exposures"
 reference_file = project_root / "data" / "reference" / "exposures.csv"
+companies_file = project_root / "data" / "reference" / "companies.csv"
 
 
 def fetch_exposure(ticker, asset_type, folder=cache_folder):
     if asset_type == "etf":
-        exposure = {"sectors": yf.Ticker(ticker).funds_data.sector_weightings}
+        funds = yf.Ticker(ticker).funds_data
+        exposure = {
+            "sectors": funds.sector_weightings,
+            "holdings": [{"symbol": symbol, "name": row["Name"], "weight": row["Holding Percent"]}
+                        for symbol, row in funds.top_holdings.iterrows()],
+        }
     else:
         info = yf.Ticker(ticker).info
         exposure = {"sector": info.get("sector"), "country": info.get("country")}
@@ -37,6 +43,7 @@ def fetch_exposure(ticker, asset_type, folder=cache_folder):
         print(f"WARNING: no exposure data for {ticker} ({asset_type}), skipped")
         return
 
+    exposure["as_of"] = date.today().isoformat()
     folder.mkdir(parents=True, exist_ok=True)
     with open(folder / f"{ticker}.json", "w", encoding="utf-8") as f:
         json.dump(exposure, f, indent=2)
@@ -57,6 +64,35 @@ def clean_name(kind, name):
         return UNCLASSIFIED
     return sector_key(name) if kind == "sector" else name
 
+def clean_company(name):
+    """Clean company names for consistency."""
+    # "& Co" and "and Co" go whole: stripping " Co" alone leaves "Merck &" and "Eli Lilly and".
+    SUFFIXES = (" Class A", " Class B", " Class C", " Class H", " Ordinary Shares", " Inc", " Corp", " Ltd",
+                " PLC", " & Co", " and Co", " Co")
+    stripped = True
+    while stripped:
+        stripped = False
+        for suffix in SUFFIXES:
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                stripped = True
+    return name
+
+def company_names(paths, override_path):
+    """Symbol -> company name: cleaned yfinance names, then the override file on top."""
+    names = {}
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        for holding in data.get("holdings") or []:
+            names[holding["symbol"]] = clean_company(holding["name"])
+
+    if override_path.exists():
+        with open(override_path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                names[row["symbol"]] = row["company"]
+    return names
+
 
 def parse_exposure(path, instrument_id, asset_type):
     """Turn a cached JSON into (instrument_id, kind, name, weight, source, as_of) rows."""
@@ -64,10 +100,12 @@ def parse_exposure(path, instrument_id, asset_type):
         data = json.load(f)
 
     if asset_type == "etf":
-        return [
-            (instrument_id, "sector", clean_name("sector", name), Decimal(str(weight)), "yfinance", None)
-            for name, weight in (data.get("sectors") or {}).items()
-        ]
+        as_of = date.fromisoformat(data["as_of"]) if data.get("as_of") else None
+        companies = [(instrument_id, "company", h["symbol"], Decimal(str(h["weight"])), "yfinance", as_of)
+                    for h in (data.get("holdings") or [])]
+        sectors = [(instrument_id, "sector", clean_name("sector", name), Decimal(str(weight)), "yfinance", None)
+            for name, weight in (data.get("sectors") or {}).items()]
+        return sectors + companies
 
     rows = []
     if data.get("sector"):
@@ -107,14 +145,15 @@ def normalise(rows):
     for instrument_id, kind, _, weight, _, _ in rows:
         totals[(instrument_id, kind)] += weight
     return [
-        (instrument_id, kind, name, (weight / totals[(instrument_id, kind)]).quantize(Decimal("0.000001")),
-         source, as_of)
+        (instrument_id, kind, name,
+            weight if kind == "company" else (weight / totals[(instrument_id, kind)]).quantize(Decimal("0.000001")),
+            source, as_of)
         for instrument_id, kind, name, weight, source, as_of in rows
     ]
 
 
-def save_exposures_to_db(connection, rows):
-    """Replace every row in exposures, all or nothing."""
+def save_exposures_to_db(connection, rows, names=None):
+    """Replace every row in exposures and companies, all or nothing."""
     connection.begin()
     try:
         connection.execute("DELETE FROM exposures")
@@ -123,6 +162,9 @@ def save_exposures_to_db(connection, rows):
                 "INSERT INTO exposures (instrument_id, kind, name, weight, source, as_of) VALUES (?, ?, ?, ?, ?, ?)",
                 rows,
             )
+        connection.execute("DELETE FROM companies")
+        if names:
+            connection.executemany("INSERT INTO companies (symbol, company) VALUES (?, ?)", list(names.items()))
         connection.commit()
     except Exception:
         connection.rollback()
@@ -139,6 +181,7 @@ def run(connection, fetch=True):
     ).fetchall()
 
     rows = []
+    paths = []
     for instrument_id, _, ticker, asset_type in instruments:
         if fetch:
             try:
@@ -148,10 +191,11 @@ def run(connection, fetch=True):
         path = cache_folder / f"{ticker}.json"
         if path.exists():
             rows += parse_exposure(path, instrument_id, asset_type)
+            paths.append(path)
 
     isin_to_id = {isin: instrument_id for instrument_id, isin, _, _ in instruments}
     rows = normalise(apply_overrides(rows, load_overrides(reference_file), isin_to_id))
-    save_exposures_to_db(connection, rows)
+    save_exposures_to_db(connection, rows, company_names(paths, companies_file))
     return len(rows)
 
 

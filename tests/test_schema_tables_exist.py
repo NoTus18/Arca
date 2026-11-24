@@ -19,6 +19,7 @@ def test_schema_tables_exist():
         "fx_rates",
         "import_runs",
         "exposures",
+        "companies",
         "cash_balances",
         "holdings",
         "transaction_summary",
