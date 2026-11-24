@@ -7,7 +7,7 @@ import pytest
 from dashboard import components as ui
 from dashboard import data
 from dashboard.app import app  # noqa: F401  registers the pages
-from dashboard.pages import activity, allocation, data_status, holdings, income, overview, performance
+from dashboard.pages import activity, allocation, data_status, holdings, income, lookthrough, overview, performance, risk
 from init_db import apply_sql_files
 
 
@@ -57,6 +57,8 @@ def test_every_page_renders_without_an_error(filters):
         *(holdings.render(*filters, sort) for sort in holdings.SORTS),
         *(performance.render(*filters, choice) for choice in performance.RANGES),
         *(allocation.render(*filters, by, cash) for by in allocation.GROUPS for cash in (True, False)),
+        *(lookthrough.render(*filters, by) for by in lookthrough.GROUPS),
+        risk.render(*filters),
         *(income.render_dividends(*filters, by) for by in income.DIVIDEND_GROUPS),
         *(income.render_fees(*filters, by) for by in income.FEE_GROUPS),
         activity.render(*filters, "meta", ["buy"], 1)[0],
@@ -98,14 +100,14 @@ def test_activity_shows_sub_cent_amounts():
     assert activity.decimals(Decimal("0.73")) == 2
 
 
-def test_allocation_looks_through_to_sector_weights():
+def test_lookthrough_spreads_holdings_over_sector_weights():
     # META has a sector but no country, so the country view has nothing to spread.
     with duckdb.connect(data.DATABASE) as connection:
         connection.execute("INSERT INTO exposures (instrument_id, kind, name, weight, source) "
                            "VALUES (5, 'sector', 'technology', 1, 'yfinance')")
-    sector = rendered(allocation.render(["2"], None, None, "sector", True))
+    sector = rendered(lookthrough.render(["2"], None, None, "sector"))
     assert "Technology" in sector and "€512.82" in sector and "Leaves out" not in sector
-    assert "No country weights" in rendered(allocation.render(["2"], None, None, "country", True))
+    assert "No country weights" in rendered(lookthrough.render(["2"], None, None, "country"))
 
 
 def test_fees_show_which_kind_of_transaction_they_came_from():
@@ -148,3 +150,43 @@ def test_performance_shows_time_and_money_weighted_returns_for_every_range():
         page = rendered(performance.render(["2"], None, None, choice))
         assert "Time-weighted return" in page and "Money-weighted return" in page
         assert "Gain as a percentage" not in page
+
+
+def test_performance_explains_every_value_on_hover():
+    for filters in ((["2"], None, None), (["2"], None, ["META"])):
+        for choice in performance.RANGES:
+            page = rendered(performance.render(*filters, choice))
+            for help_text in ("Deposits never count as gain", "latest close", "factsheets", "XIRR"):
+                assert help_text in page
+    # A range other than All also explains where it starts.
+    assert "close before this range began" in rendered(performance.render(["2"], None, None, "1M"))
+
+
+def test_sidebar_groups_pages_into_basics_analysis_and_records():
+    from dashboard.app import navigation
+    nav = rendered(navigation())
+    assert nav.index("Basics") < nav.index("Allocation") < nav.index("Analysis") < nav.index("Look-through")
+    assert nav.index("Risk") < nav.index("Records") < nav.index("Activity")
+    assert set(allocation.GROUPS) == {"asset_type", "currency", "account", "ticker"}
+
+
+def test_lookthrough_company_tab_splits_direct_and_via_funds():
+    # META is held directly in the fixture, so it shows as its own company.
+    page = rendered(lookthrough.render(["2"], None, None, "company"))
+    assert "Meta" in page and "Held directly" in page and "€512.82" in page
+
+
+def test_lookthrough_shows_concentration_on_country_sector_and_company():
+    with duckdb.connect(data.DATABASE) as connection:
+        connection.execute("INSERT INTO exposures (instrument_id, kind, name, weight, source) "
+                           "VALUES (5, 'sector', 'technology', 1, 'yfinance'), (5, 'country', 'United States', 1, 'yfinance')")
+    for by, noun in (("country", "countries"), ("sector", "sectors"), ("company", "companies")):
+        page = rendered(lookthrough.render(["2"], None, None, by))
+        assert "Concentration" in page and f"effective {noun}" in page
+    assert "Concentration" not in rendered(lookthrough.render(["2"], None, None, "region"))
+
+
+def test_risk_page_shows_its_numbers_and_charts():
+    page = rendered(risk.render(["2"], None, None))
+    for text in ("Volatility", "Largest fall", "Worst day", "Worst month", "Drawdown over time", "trading days"):
+        assert text in page

@@ -3,6 +3,7 @@ import functools
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
+import statistics
 
 
 def check_known(connection, column, given):
@@ -503,4 +504,182 @@ def returns(history, start=None):
         "money_weighted": rate * 100 if rate is not None else None,
         "days": days,
         "annualised": annualised,
+    }
+
+def lookthrough_companies(connection, account_ids, asset_types=None, tickers=None):
+    """Money by company, ETFs opened up into their listed holdings; each fund's unlisted part is its own row."""
+    values = {r["group"]: r["value_eur"]
+              for r in allocation(connection, account_ids, by="ticker", asset_types=asset_types, tickers=tickers,
+                                  include_cash=False)
+              if r["value_eur"] != 0}
+
+    instruments = {ticker: (instrument_id, asset_type, name) for instrument_id, ticker, asset_type, name in
+                   connection.execute("SELECT instrument_id, price_ticker, asset_type, name FROM instruments").fetchall()}
+    names = dict(connection.execute("SELECT symbol, company FROM companies").fetchall())
+    weights = defaultdict(list)
+    for instrument_id, symbol, weight in connection.execute(
+            "SELECT instrument_id, name, weight FROM exposures WHERE kind = 'company'").fetchall():
+        weights[instrument_id].append((symbol, weight))
+
+    parts = defaultdict(list)
+    rest_names = set()
+
+    def company_of(symbol):
+        if symbol in names:
+            return names[symbol]
+        if symbol in instruments:
+            return instruments[symbol][2]
+        return symbol
+
+    for ticker, value in values.items():
+        instrument_id, asset_type, _ = instruments[ticker]
+        if asset_type != "etf":
+            parts[company_of(ticker)].append((ticker, value, True))
+        else:
+            for symbol, weight in weights[instrument_id]:
+                parts[company_of(symbol)].append((ticker, value * weight, False))
+            rest = f"Rest of {ticker}"
+            parts[rest].append((ticker, value * (1 - sum(w for _, w in weights[instrument_id])), False))
+            rest_names.add(rest)
+
+    result = []
+    for company, pieces in parts.items():
+        direct = sum((eur for _, eur, is_direct in pieces if is_direct), Decimal(0))
+        via = sum((eur for _, eur, is_direct in pieces if not is_direct), Decimal(0))
+        by_source = defaultdict(Decimal)
+        for t, eur, _ in pieces:
+            by_source[t] += eur
+        sources = sorted(by_source.items(), key=lambda s: s[1], reverse=True)
+        result.append({"company": company, "direct_eur": direct, "via_etfs_eur": via, "total_eur": direct + via,
+                        "sources": sources, "is_rest": company in rest_names})
+
+    total = sum((r["total_eur"] for r in result), Decimal(0))
+    for r in result:
+        r["weight_pct"] = r["total_eur"] / total * 100 if total else Decimal(0)
+
+    result.sort(key=lambda r: (r["is_rest"], -r["total_eur"]))
+    return result
+
+def effective_number(values, exclude=(), diffuse=()):
+    kept = {k: Decimal(str(v)) for k, v in values.items() if k not in exclude}
+
+    total = sum(kept.values())
+    if total == 0:
+        return None
+
+    sum_sq = sum((v / total) ** 2 for k, v in kept.items() if k not in diffuse)
+    if sum_sq == 0:
+        return None
+    else:
+        return 1 / sum_sq
+
+def daily_returns(history):
+    """Return per trading day, deposits taken out: (date, fraction). Weekends and days before any money are skipped."""
+    growth = time_weighted(history)
+    result = []
+    for i in range(1, len(history)):
+        day = history[i]["date"]
+        if day.weekday() >= 5:
+            continue
+        if history[i - 1]["value_eur"] <= 0:
+            continue
+        result.append((day, growth[i][1] / growth[i - 1][1] - 1))
+    return result
+
+def drawdowns(history):
+    """How far below its highest point so far, per day: 0 at a new high, −0.25 = 25% below."""
+    growth = time_weighted(history)
+    peak = Decimal(0)
+    result = []
+    for day, g in growth:
+        if g > peak:
+            peak = g
+        result.append((day, g / peak - 1))
+    return result
+
+
+def risk_summary(history):
+    """Volatility, drawdowns and the worst and best day and month, from returns with deposits taken out (in %)."""
+    returns = daily_returns(history)
+    if not returns:
+        return None
+    downs = drawdowns(history)
+
+    start = next(r["date"] for r in history if r["value_eur"] > 0)
+    end = history[-1]["date"]
+    observations = len(returns)
+    values = [r for _, r in returns]
+    volatility = statistics.stdev(values) * Decimal(252).sqrt() * 100 if observations >= 2 else None
+
+    # The deepest point, the last high before it, and the first day back at that high (None if not yet).
+    bottom_day, depth = min(downs, key=lambda d: d[1])
+    peak = recovery = None
+    if depth < 0:
+        peak = max(day for day, d in downs if day < bottom_day and d == 0)
+        recovery = next((day for day, d in downs if day > bottom_day and d == 0), None)
+    else:
+        bottom_day = None
+
+    worst_date, worst = min(returns, key=lambda x: x[1])
+    best_date, best = max(returns, key=lambda x: x[1])
+
+    months = defaultdict(lambda: Decimal(1))
+    for day, r in returns:
+        months[day.strftime("%Y-%m")] *= 1 + r
+    worst_month, month_growth = min(months.items(), key=lambda m: m[1])
+
+    return {
+        "volatility": volatility,
+        "max_drawdown": {"depth": depth * 100, "peak": peak, "bottom": bottom_day, "recovery": recovery},
+        "current_drawdown": downs[-1][1] * 100,
+        "worst_day": (worst_date, worst * 100),
+        "best_day": (best_date, best * 100),
+        "worst_month": (worst_month, (month_growth - 1) * 100),
+        "start": start,
+        "end": end,
+        "observations": observations,
+        "enough": observations >= 60,
+    }
+
+
+def correlations(connection, account_ids, asset_types=None, tickers=None):
+    held = sorted(r["group"] for r in allocation(connection, account_ids, by="ticker", asset_types=asset_types,
+                    tickers=tickers, include_cash=False) if r["value_eur"] != 0)
+
+    eur_returns = connection.execute(
+        """
+        SELECT i.price_ticker, p.date,
+        p.adj_close / CASE WHEN p.currency = 'EUR' THEN 1 ELSE f.rate END AS eur_price
+        FROM prices p
+        JOIN instruments i ON i.instrument_id = p.instrument_id
+        LEFT JOIN daily_fx f ON f.quote_currency = p.currency AND f.date = p.date
+        WHERE list_contains($tickers, i.price_ticker)
+        ORDER BY i.price_ticker, p.date
+        """,
+        {"tickers": held},
+    ).fetchall()
+
+    series = defaultdict(dict)
+    last_price = {}
+    for ticker, day, price in eur_returns:
+        if price is None:
+            continue
+        if ticker in last_price:
+            series[ticker][day] = price / last_price[ticker] - 1
+        last_price[ticker] = price
+
+    def correlation(a, b):
+        days = sorted(a.keys() & b.keys())
+        if len(days) < 60:
+            return None
+        try:
+            return statistics.correlation([float(a[d]) for d in days], [float(b[d]) for d in days])
+        except statistics.StatisticsError:
+            return None
+
+    portfolio = dict(daily_returns(performance(connection, account_ids, asset_types=asset_types, tickers=tickers)))
+    return {
+        "tickers": held,
+        "matrix": [[1 if a == b else correlation(series[a], series[b]) for b in held] for a in held],
+        "to_portfolio": {t: correlation(series[t], portfolio) for t in held}
     }

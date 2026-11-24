@@ -89,6 +89,16 @@ body {
     border-left-color: var(--arca-brass);
 }
 
+.nav-group {
+    padding: 0 12px;
+    margin-top: 14px;
+    margin-bottom: 2px;
+}
+
+.nav-group:first-child {
+    margin-top: 0;
+}
+
 /* Type scale */
 .page-title {
     font-size: 1.75rem;
@@ -228,4 +238,34 @@ body {
 .breakdown-total {
     border-top: 1px solid var(--arca-rule);
     padding-top: 6px;
+}
+
+/* Correlation heatmap */
+.heat-table {
+    border-collapse: separate;
+    border-spacing: 2px;
+    font-size: var(--mantine-font-size-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.heat-head {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-weight: 500;
+    padding: 4px 0;
+    text-align: left;
+}
+
+.heat-label {
+    font-weight: 500;
+    text-align: right;
+    padding-right: 8px;
+    white-space: nowrap;
+}
+
+.heat-cell {
+    width: 44px;
+    height: 30px;
+    text-align: center;
+    border-radius: 3px;
 }

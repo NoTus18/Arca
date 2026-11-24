@@ -36,21 +36,20 @@ def range_start(choice, last):
 def money_in_card(total, breakdown, holdings_view, dividends_in_gain):
     """The money put in, with what it's made of on hover."""
     label = "Net bought" if holdings_view else "Money put in"
-    lines = [dmc.Group([dmc.Text(name, size="sm"), dmc.Text(ui.eur(amount), size="sm", className="num")],
-                       justify="space-between") for name, amount in breakdown]
+    meaning = ("Buys minus sales and dividends of the selected holdings in this range." if holdings_view else
+               "Deposits minus withdrawals in this range; rewards count as deposits.")
+    lines = [dmc.Text(meaning, size="xs", c="dimmed")]
+    lines += [dmc.Group([dmc.Text(name, size="sm"), dmc.Text(ui.eur(amount), size="sm", className="num")],
+                        justify="space-between") for name, amount in breakdown]
     lines.append(dmc.Group([dmc.Text("Total", size="sm", fw=650), dmc.Text(ui.eur(total), size="sm", fw=650)],
                            justify="space-between", className="breakdown-total"))
     if not holdings_view and dividends_in_gain:
         lines.append(dmc.Text(f"Dividends of {ui.eur(dividends_in_gain)} were paid into the accounts, so they "
                               "count in the gain, not here.", size="xs", c="dimmed"))
-    return dmc.HoverCard(
-        [dmc.HoverCardTarget(html.Div(ui.stat(label, ui.eur(total), dmc.Text("Hover for the breakdown", size="xs",
-                                                                             c="dimmed")),
-                                      className="has-breakdown", tabIndex=0)),
-         dmc.HoverCardDropdown(dmc.Stack(lines or [dmc.Text("No money in or out in this period", size="sm")],
-                                         gap=6))],
-        width=300, shadow="md", position="bottom-start", withArrow=True, openDelay=100,
-    )
+    if not breakdown:
+        lines.append(dmc.Text("No money in or out in this period", size="sm"))
+    return ui.explained(ui.stat(label, ui.eur(total), dmc.Text("Hover for the breakdown", size="xs", c="dimmed")),
+                        lines)
 
 
 @callback(Output("performance-content", "children"), *ui.FILTERS, Input("performance-range", "value"))
@@ -94,25 +93,43 @@ def render(accounts, asset_types, tickers, choice):
                f"{ui.eur(last['invested_eur'], decimals=0)} {invested_label.lower()}, all time"
     end = f"{last['date']:%-d %b %Y}"
     cards = [
-        ui.stat("Gain" if index == 0 else f"Gain, {base['date']:%-d %b %Y} to {end}",
-                ui.signed_text(ui.eur(gain_change, signed=True), gain_change, className="stat-value"),
-                note(all_time if index == 0 else "Value change, not counting money put in")),
+        ui.explained(
+            ui.stat("Gain" if index == 0 else f"Gain, {base['date']:%-d %b %Y} to {end}",
+                    ui.signed_text(ui.eur(gain_change, signed=True), gain_change, className="stat-value"),
+                    note(all_time if index == 0 else "Value change, not counting money put in")),
+            "What the investments made in this range: value at the end, minus value at the start, minus the "
+            "money put in. Deposits never count as gain. The percentage underneath is all-time gain over money "
+            "in, which new deposits dilute; the returns below don't have that problem."),
     ]
     if index > 0:  # on "All" the start is always €0
-        cards.append(ui.stat("Value at start", ui.eur(base["value_eur"]), note(f"Close on {base['date']:%-d %b %Y}")))
+        cards.append(ui.explained(
+            ui.stat("Value at start", ui.eur(base["value_eur"]), note(f"Close on {base['date']:%-d %b %Y}")),
+            "What the selection was worth at the close before this range began. Changes in this range are "
+            "measured from here."))
     cards += [
-        ui.stat("Value at end", ui.eur(last["value_eur"]), note(end if index == 0 else all_time)),
+        ui.explained(
+            ui.stat("Value at end", ui.eur(last["value_eur"]), note(end if index == 0 else all_time)),
+            "What the selection is worth at the latest close, at that day's prices and ECB exchange rates."
+            + ("" if holdings_view else " Includes cash in the accounts.")),
         money_in_card(money_in, breakdown, holdings_view, dividends_in_gain),
     ]
     result = portfolio.returns(history, start)
-    period = "per year" if result["annualised"] else f"over {result['days']} days"
+    period = "Per year" if result["annualised"] else f"Over {result['days']} days"
     twr, mwr = result["time_weighted"], result["money_weighted"]
+    per = ("It's per year because the range is a year or more." if result["annualised"] else
+           "It's over the range, not per year, because the range is shorter than a year.")
     return_cards = [
-        ui.stat("Time-weighted return", ui.signed_text(ui.pct(twr, signed=True), twr, className="stat-value"),
-                note(f"{period}: how the investments did, whatever you deposited")),
-        ui.stat("Money-weighted return",
-                ui.signed_text(ui.pct(mwr, signed=True), mwr or 0, className="stat-value"),
-                note(f"{period}: what your money earned, given when it went in")),
+        ui.explained(
+            ui.stat("Time-weighted return", ui.signed_text(ui.pct(twr, signed=True), twr, className="stat-value"),
+                    note(period)),
+            "How the investments themselves did, as if no money had been added or taken out. This is what fund "
+            f"factsheets and indexes report, so it's the one to compare with them, or one account with another. {per}"),
+        ui.explained(
+            ui.stat("Money-weighted return",
+                    ui.signed_text(ui.pct(mwr, signed=True), mwr or 0, className="stat-value"), note(period)),
+            "What your euros actually earned (XIRR): money that was invested longer counts for more. Below the "
+            "time-weighted return means deposits tended to land before weaker periods; above means your timing "
+            f"helped. {per}"),
     ]
     gap = mwr - twr if mwr is not None else Decimal(0)
     timing = None

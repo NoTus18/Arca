@@ -98,6 +98,16 @@ def stat(label, value, detail=None):
     )
 
 
+def explained(stat_card, meaning):
+    """A stat with help on hover or keyboard focus; its label gets a dotted underline. `meaning` is text or components."""
+    body = [dmc.Text(meaning, size="sm")] if isinstance(meaning, str) else meaning
+    return dmc.HoverCard(
+        [dmc.HoverCardTarget(html.Div(stat_card, className="has-breakdown", tabIndex=0)),
+         dmc.HoverCardDropdown(dmc.Stack(body, gap=6))],
+        width=300, shadow="md", position="bottom-start", withArrow=True, openDelay=100,
+    )
+
+
 def weight_bar(weight_pct, color=SERIES[0]):
     return dmc.Group(
         [dmc.Progress(value=float(weight_pct), color=color, size="sm", w=72, radius="xl"),
