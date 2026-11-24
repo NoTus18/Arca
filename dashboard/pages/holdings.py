@@ -8,7 +8,7 @@ from analysis import portfolio
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/holdings", name="Holdings", order=1)
+dash.register_page(__name__, path="/holdings", name="Holdings", order=1, group="Basics")
 
 SORTS = {
     "value": ("Value", lambda h: h["value_eur"]),

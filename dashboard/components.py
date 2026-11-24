@@ -108,6 +108,23 @@ def explained(stat_card, meaning):
     )
 
 
+def ranked_bars(rows, label, sublabel, wrap=lambda row, child: child, muted=lambda row: False):
+    """Too many groups for distinct colours: ranked bars in one colour instead of a donut."""
+    largest = max(r["value_eur"] for r in rows)
+    return dmc.Stack(
+        [wrap(r, dmc.Group(
+            [dmc.Stack([dmc.Text(label(r), size="sm", truncate=True), dmc.Text(sublabel(r), size="xs", c="dimmed")],
+                       gap=0, w={"base": 140, "sm": 260}),
+             dmc.Progress(value=float(r["value_eur"] / largest * 100), size="lg", radius="sm", style={"flex": 1},
+                          color=UNCLASSIFIED if muted(r) else SERIES[0]),
+             dmc.Text(eur(r["value_eur"]), size="sm", className="num", w=96, ta="right"),
+             dmc.Text(pct(r["weight_pct"]), size="sm", className="num", w=56, ta="right", fw=600)],
+            gap="md", wrap="nowrap"))
+         for r in rows],
+        gap="sm",
+    )
+
+
 def weight_bar(weight_pct, color=SERIES[0]):
     return dmc.Group(
         [dmc.Progress(value=float(weight_pct), color=color, size="sm", w=72, radius="xl"),

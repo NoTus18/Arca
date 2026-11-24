@@ -8,7 +8,7 @@ from analysis import portfolio
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/", name="Overview", order=0)
+dash.register_page(__name__, path="/", name="Overview", order=0, group="Basics")
 
 layout = html.Div(id="overview-content")
 

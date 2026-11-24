@@ -9,7 +9,7 @@ from analysis import portfolio
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/income", name="Dividends & fees", order=4)
+dash.register_page(__name__, path="/income", name="Dividends & fees", order=4, group="Basics")
 
 DIVIDEND_GROUPS = {"month": "Month", "year": "Year", "ticker": "Holding"}
 FEE_GROUPS = {"year": "Year", "month": "Month", "type": "Type", "account": "Account"}

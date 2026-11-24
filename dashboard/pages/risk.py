@@ -1,6 +1,6 @@
 import dash
 import dash_mantine_components as dmc
-from dash import Output, callback, html
+from dash import Input, Output, callback, html
 
 from analysis import portfolio
 from dashboard import components as ui
@@ -8,11 +8,24 @@ from dashboard import data
 
 dash.register_page(__name__, path="/risk", name="Risk", order=6, group="Analysis")
 
+DEFAULT_COMPARE = 5
+
 layout = html.Div(
     [
         ui.page_header("Risk", "How bumpy the ride has been: daily swings, falls from the top and how holdings move "
                                "together. Deposits are taken out, so only market moves count."),
         html.Div(id="risk-content"),
+        ui.panel(
+            dmc.Stack([
+                dmc.ChipGroup(id="risk-compare", multiple=True, value=[], children=[]),
+                html.Div(id="risk-correlation"),
+            ], gap="md"),
+            title="How holdings move together", mt="lg",
+            description="Correlation of daily returns in euros: 1 moves together, 0 unrelated, −1 opposite. Starts "
+                        f"with your {DEFAULT_COMPARE} largest holdings; click a ticker to add or remove it. US stocks "
+                        "close hours after European markets, so against European-listed funds they look less "
+                        "related than they are.",
+        ),
     ]
 )
 
@@ -57,14 +70,21 @@ def heat(value):
     return {"background": f"color-mix(in srgb, {color} {abs(value) * 70:.0f}%, transparent)"}
 
 
-def heatmap(result):
-    tickers = result["tickers"]
-    head = html.Tr([html.Th("")] + [html.Th(t, className="heat-head") for t in tickers])
-    rows = [html.Tr([html.Th(a, className="heat-label")]
-                    + [html.Td("" if i == j else ("–" if v is None else f"{v:.2f}"), style=heat(None if i == j else v),
-                               className="heat-cell", title=f"{a} and {tickers[j]}")
-                       for j, v in enumerate(result["matrix"][i])])
-            for i, a in enumerate(tickers)]
+def heatmap(result, picked, names):
+    """Only the picked holdings, lower half: each pair once, no diagonal of 1s."""
+    index = {t: i for i, t in enumerate(result["tickers"])}
+    picked = [t for t in picked if t in index]
+    head = html.Tr([html.Th("")] + [html.Th(t, className="heat-head", title=names.get(t, t)) for t in picked[:-1]])
+    rows = []
+    for i, a in enumerate(picked[1:], start=1):
+        cells = []
+        for b in picked[:i]:
+            v = result["matrix"][index[a]][index[b]]
+            label = "–" if v is None else f"{v:.2f}"
+            cells.append(html.Td(label, style=heat(v), className="heat-cell",
+                                 title=f"{names.get(a, a)} and {names.get(b, b)}: {label}"))
+        cells += [html.Td("") for _ in picked[i:-1]]
+        rows.append(html.Tr([html.Th(a, className="heat-label", title=names.get(a, a))] + cells))
     return dmc.ScrollArea(html.Table([html.Thead(head), html.Tbody(rows)], className="heat-table"), type="auto")
 
 
@@ -90,7 +110,6 @@ def render(accounts, asset_types, tickers):
     with data.connect() as connection:
         history = portfolio.performance(connection, account_ids, asset_types, tickers)
         summary = portfolio.risk_summary(history)
-        result = portfolio.correlations(connection, account_ids, asset_types, tickers) if summary else None
 
     if not summary or summary["volatility"] is None:
         return ui.empty("Not enough history yet", "Risk numbers need at least a few trading days of prices.")
@@ -111,27 +130,54 @@ def render(accounts, asset_types, tickers):
         referenceLines=[{"y": 0, "color": "var(--arca-ink-soft)"}],
     )
 
-    together = ui.empty("Not enough shared history", "Correlations need 60 trading days that both holdings have.")
-    if result and len(result["tickers"]) < 2:
-        together = ui.empty("Only one holding selected", "Correlation compares holdings with each other.")
-    elif result and any(v is not None for row in result["matrix"] for v in row if v != 1):
-        together = dmc.Grid(
-            [dmc.GridCol(heatmap(result), span={"base": 12, "lg": 8}),
-             dmc.GridCol(dmc.Stack([dmc.Text("With the whole portfolio", size="sm", fw=600), with_portfolio(result)],
-                                   gap="sm"), span={"base": 12, "lg": 4})],
-            gutter="xl",
-        )
-
     return dmc.Stack(
         [
             ui.panel(dmc.Stack([dmc.SimpleGrid(cards, cols={"base": 2, "md": 3}, spacing="lg"),
                                 dmc.Text(period, size="xs", c="dimmed")], gap="md")),
             ui.panel(underwater, title="Drawdown over time",
                      description="How far below its highest point so far the portfolio was each day. 0% is a new high."),
-            ui.panel(together, title="How holdings move together",
-                     description="Correlation of daily returns in euros: 1 moves together, 0 unrelated, −1 opposite. "
-                                 "US stocks close hours after European markets, so against European-listed funds "
-                                 "they look less related than they are."),
         ],
         gap="lg",
+    )
+
+
+@callback(Output("risk-compare", "children"), Output("risk-compare", "value"), *ui.FILTERS)
+def compare_options(accounts, asset_types, tickers):
+    """The held holdings of the selection to pick from, starting with the largest few."""
+    account_ids, asset_types, tickers = data.selection(accounts, asset_types, tickers)
+    if not account_ids:
+        return [], []
+    with data.connect() as connection:
+        held = [r["group"] for r in portfolio.allocation(connection, account_ids, by="ticker", asset_types=asset_types,
+                                                         tickers=tickers, include_cash=False) if r["value_eur"] != 0]
+        names = data.instruments(connection)
+    # Largest first (allocation sorts that way), so the preselected ones lead the row; full name on hover.
+    chips = dmc.Group([dmc.Tooltip(dmc.Chip(t, value=t, size="xs", variant="light"), label=names[t][0], openDelay=300)
+                       for t in held], gap=6)
+    return chips, held[:DEFAULT_COMPARE]
+
+
+@callback(Output("risk-correlation", "children"), *ui.FILTERS, Input("risk-compare", "value"))
+@ui.guarded
+def render_correlation(accounts, asset_types, tickers, compare):
+    account_ids, asset_types, tickers = data.selection(accounts, asset_types, tickers)
+    if not account_ids:
+        return None
+    if not compare or len(compare) < 2:
+        return ui.empty("Pick at least two holdings to compare", "Correlation compares holdings with each other.")
+
+    with data.connect() as connection:
+        result = portfolio.correlations(connection, account_ids, asset_types, tickers)
+        names = {t: name for t, (name, _, _) in data.instruments(connection).items()}
+
+    shown = [t for t in compare if t in result["tickers"]]
+    if not any(result["matrix"][result["tickers"].index(a)][result["tickers"].index(b)] is not None
+               for i, a in enumerate(shown) for b in shown[:i]):
+        return ui.empty("Not enough shared history", "Correlations need 60 trading days that both holdings have.")
+
+    return dmc.Grid(
+        [dmc.GridCol(heatmap(result, shown, names), span={"base": 12, "lg": 7}),
+         dmc.GridCol(dmc.Stack([dmc.Text("Each holding with the whole portfolio", size="sm", fw=600),
+                                with_portfolio(result)], gap="sm"), span={"base": 12, "lg": 5})],
+        gutter="xl",
     )

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import dash
 import dash_mantine_components as dmc
-from dash import Dash, Input, Output, State, callback, clientside_callback, dcc, page_container
+from dash import ALL, Dash, Input, Output, State, callback, clientside_callback, dcc, page_container
 
 from dashboard import data
 
@@ -48,19 +48,32 @@ app = Dash(
 )
 
 
+NAV_GROUPS = ["Basics", "Analysis", "Records"]
+
+
+def group_of(path):
+    """The sidebar group of the page at `path`, or None."""
+    return next((page.get("group", "Basics") for page in dash.page_registry.values()
+                 if page["relative_path"] == path), None)
+
+
 def navigation():
+    """Everyday pages first; the deeper numbers get their own folding group so the basics stay calm."""
     pages = sorted(dash.page_registry.values(), key=lambda page: page["order"])
     return dmc.Stack(
-        [dmc.NavLink(label=page["name"], href=page["relative_path"], active="exact", className="nav-link")
-         for page in pages],
+        [dmc.NavLink(label=group, id={"type": "nav-group", "group": group}, opened=group == "Basics",
+                     className="nav-group", childrenOffset=0,
+                     children=[dmc.NavLink(label=page["name"], href=page["relative_path"], active="exact",
+                                           className="nav-link")
+                               for page in pages if page.get("group", "Basics") == group])
+         for group in NAV_GROUPS],
         gap=2,
     )
 
 
 def filters(options):
-    return dmc.Stack(
+    controls = dmc.Stack(
         [
-            dmc.Text("Selection", size="xs", fw=600, c="dimmed"),
             dmc.MultiSelect(
                 id="f-accounts", label="Accounts", data=options["accounts"],
                 value=[o["value"] for o in options["accounts"]],
@@ -78,6 +91,12 @@ def filters(options):
             dmc.Text("A holdings filter leaves out cash and deposits.", size="xs", c="dimmed"),
         ],
         gap="sm",
+    )
+    return dmc.Accordion(
+        dmc.AccordionItem([dmc.AccordionControl("Selection", className="nav-section"),
+                           dmc.AccordionPanel(controls)], value="selection"),
+        id="selection-fold", value="selection", variant="unstyled", chevronPosition="right",
+        persistence=True, persistence_type="local",
     )
 
 
@@ -105,8 +124,9 @@ def layout():
 
     navbar = dmc.AppShellNavbar(
         [
-            dmc.AppShellSection(navigation()),
-            dmc.AppShellSection(dmc.ScrollArea(filters(options), type="never"), grow=True, mt="xl"),
+            # Pages and filters scroll as one column; the theme switch stays at the bottom.
+            dmc.AppShellSection(dmc.Stack([navigation(), filters(options)], gap="lg"), grow=True,
+                                className="nav-scroll"),
             dmc.AppShellSection(
                 dmc.SegmentedControl(
                     id="color-scheme", data=[{"value": "auto", "label": "Auto"},
@@ -150,6 +170,13 @@ def toggle_navbar(opened, navbar):
 @callback(Output("burger", "opened"), Input("_pages_location", "pathname"), prevent_initial_call=True)
 def close_navbar_on_navigate(_):
     return False
+
+
+@callback(Output({"type": "nav-group", "group": ALL}, "opened"), Input("_pages_location", "pathname"))
+def open_current_group(path):
+    """Unfold the group of the page you're on, so you always see where you are; leave the others alone."""
+    current = group_of(path)
+    return [True if group == current else dash.no_update for group in NAV_GROUPS]
 
 
 clientside_callback(

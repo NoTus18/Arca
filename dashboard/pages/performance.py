@@ -9,7 +9,7 @@ from analysis import portfolio
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/performance", name="Performance", order=2)
+dash.register_page(__name__, path="/performance", name="Performance", order=2, group="Basics")
 
 RANGES = ["1M", "3M", "6M", "YTD", "1Y", "All"]
 

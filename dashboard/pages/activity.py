@@ -7,7 +7,7 @@ from dash import Input, Output, callback, html
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/activity", name="Activity", order=5)
+dash.register_page(__name__, path="/activity", name="Activity", order=7, group="Records")
 
 PAGE_SIZE = 25
 TYPE_COLORS = {"buy": "blue", "sell": "orange", "dividend": "teal", "deposit": "gray", "withdrawal": "gray",

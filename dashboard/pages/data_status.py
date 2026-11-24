@@ -7,7 +7,7 @@ from dash import html
 from dashboard import components as ui
 from dashboard import data
 
-dash.register_page(__name__, path="/data", name="Data", order=9)
+dash.register_page(__name__, path="/data", name="Data", order=9, group="Records")
 
 STALE_AFTER_DAYS = 5  # a weekend plus a holiday is normal; more than that usually means a broken ticker
 WEIGHTS_STALE_AFTER_DAYS = 365  # hand-written country weights are refreshed once a year

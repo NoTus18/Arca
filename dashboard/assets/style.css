@@ -89,14 +89,26 @@ body {
     border-left-color: var(--arca-brass);
 }
 
-.nav-group {
-    padding: 0 12px;
-    margin-top: 14px;
-    margin-bottom: 2px;
+/* Folding group headings (Basics, Analysis, Records) and the Selection fold: small caps-like labels. */
+.nav-group,
+.nav-section {
+    border-radius: var(--mantine-radius-sm);
+    font-size: var(--mantine-font-size-xs);
+    font-weight: 600;
+    color: var(--mantine-color-dimmed);
+    letter-spacing: 0.02em;
 }
 
-.nav-group:first-child {
-    margin-top: 0;
+.nav-section {
+    padding: 8px 12px;
+}
+
+/* Pages and filters scroll together; min-height 0 lets the flex child shrink so it can scroll. */
+.nav-scroll {
+    overflow-y: auto;
+    min-height: 0;
+    margin-right: calc(var(--mantine-spacing-md) * -1);
+    padding-right: var(--mantine-spacing-md);
 }
 
 /* Type scale */
